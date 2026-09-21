@@ -34,7 +34,7 @@
         var(--bg);
       min-height: 100vh;
     }
-    .wrap { width: min(1200px, calc(100% - 2rem)); margin: 0 auto; padding: 1.5rem 0 3rem; }
+    .wrap { width: min(1280px, calc(100% - 2rem)); margin: 0 auto; padding: 1.5rem 0 3rem; }
     header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
     header img { width: 52px; height: 52px; border-radius: 12px; }
     header h1 { margin: 0; font-family: var(--display); font-size: 1.9rem; }
@@ -63,12 +63,12 @@
     .status.ok { color: var(--ok); }
     .status.err { color: var(--danger); }
     .crumbs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .75rem; align-items: center; }
-    .crumbs a, .crumbs button.link {
+    .crumbs button.link {
       background: none; border: none; color: var(--accent); padding: 0; font-weight: 600; cursor: pointer;
     }
     .crumbs span { color: var(--muted); }
-    .layout { display: grid; grid-template-columns: 220px 1fr; gap: 1rem; }
-    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+    .layout { display: grid; grid-template-columns: 200px 1fr 280px; gap: 1rem; align-items: start; }
+    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
     .panel {
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); overflow: hidden;
@@ -91,9 +91,24 @@
     }
     .card.selected { border-color: var(--accent); }
     .card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #d7dee6; }
-    .card .meta { padding: .45rem .55rem .6rem; font-size: .75rem; color: var(--muted); }
-    .card .meta strong { display: block; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .empty { padding: 2rem; text-align: center; color: var(--muted); }
+    .card .meta { padding: .45rem .55rem .6rem; font-size: .72rem; color: var(--muted); line-height: 1.35; }
+    .card .meta strong { display: block; color: var(--ink); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .2rem; }
+    .empty { padding: 2rem 1rem; text-align: center; color: var(--muted); }
+    .detail { padding: 1rem; display: grid; gap: .85rem; }
+    .detail .preview {
+      width: 100%; aspect-ratio: 4/3; object-fit: contain; border-radius: 10px; background: #eef2f6;
+    }
+    .kv { display: grid; gap: .45rem; font-size: .9rem; }
+    .kv div {
+      display: grid; grid-template-columns: 7.2rem 1fr; gap: .4rem;
+      padding-bottom: .4rem; border-bottom: 1px solid var(--line);
+    }
+    .kv span { color: var(--muted); }
+    .kv b { font-weight: 600; word-break: break-all; }
+    .hint {
+      font-size: .84rem; color: var(--muted); background: #eef6f5;
+      border: 1px solid #c9e2de; border-radius: 10px; padding: .7rem .8rem;
+    }
   </style>
 </head>
 <body>
@@ -138,18 +153,38 @@
         <h2>Fotos</h2>
         <div class="grid" id="grid"><div class="empty">Keine JPEGs</div></div>
       </section>
+      <aside class="panel">
+        <h2>EXIF aktuell</h2>
+        <div class="detail" id="detail">
+          <div class="empty">Foto auswählen</div>
+        </div>
+      </aside>
     </div>
   </div>
 
   <script>
-    const state = { path: "", files: [], selected: new Set() };
+    const state = { path: "", files: [], selected: new Set(), active: null };
     const $ = (id) => document.getElementById(id);
 
     function fmt(exif) {
       if (!exif) return "—";
-      const m = exif.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})/);
+      const m = String(exif).match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
       if (!m) return exif;
       return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}`;
+    }
+
+    function toInputDate(exif) {
+      const m = String(exif || "").match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})/);
+      if (!m) return null;
+      return { date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}` };
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
     }
 
     function setStatus(msg, kind = "") {
@@ -159,6 +194,10 @@
 
     function updateSave() {
       $("btnSave").disabled = state.selected.size === 0;
+    }
+
+    function fileByPath(path) {
+      return state.files.find((f) => f.path === path) || null;
     }
 
     async function load(path = "") {
@@ -172,9 +211,12 @@
       state.path = data.path || "";
       state.files = data.files || [];
       state.selected = new Set();
+      state.active = state.files[0]?.path || null;
+      if (state.active) state.selected.add(state.active);
       renderCrumbs(data.crumbs || []);
       renderDirs(data.dirs || []);
       renderFiles();
+      renderDetail();
       setStatus(`${state.files.length} JPEG(s) in diesem Ordner.`);
       updateSave();
     }
@@ -183,7 +225,7 @@
       const el = $("crumbs");
       let html = `<button type="button" class="link" data-path="">/photos</button>`;
       for (const c of crumbs) {
-        html += `<span>/</span><button type="button" class="link" data-path="${c.path}">${c.name}</button>`;
+        html += `<span>/</span><button type="button" class="link" data-path="${escapeHtml(c.path)}">${escapeHtml(c.name)}</button>`;
       }
       el.innerHTML = html;
       el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => load(b.dataset.path)));
@@ -196,7 +238,7 @@
         return;
       }
       el.innerHTML = dirs.map((d) =>
-        `<li><button type="button" data-path="${d.path}">📁 ${d.name}</button></li>`
+        `<li><button type="button" data-path="${escapeHtml(d.path)}">📁 ${escapeHtml(d.name)}</button></li>`
       ).join("");
       el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => load(b.dataset.path)));
     }
@@ -209,9 +251,13 @@
       }
       el.innerHTML = state.files.map((f) => {
         const sel = state.selected.has(f.path) ? "selected" : "";
-        return `<article class="card ${sel}" data-path="${f.path}">
+        return `<article class="card ${sel}" data-path="${escapeHtml(f.path)}">
           <img src="/api/thumb?path=${encodeURIComponent(f.path)}" alt="" loading="lazy" />
-          <div class="meta"><strong>${f.name}</strong>${fmt(f.original)}</div>
+          <div class="meta">
+            <strong>${escapeHtml(f.name)}</strong>
+            Original: ${escapeHtml(fmt(f.original))}<br/>
+            Digitized: ${escapeHtml(fmt(f.digitized))}
+          </div>
         </article>`;
       }).join("");
       el.querySelectorAll(".card").forEach((card) => {
@@ -223,16 +269,51 @@
           } else {
             state.selected = new Set([p]);
           }
+          state.active = p;
           renderFiles();
+          renderDetail();
           updateSave();
           setStatus(`${state.selected.size} ausgewählt`);
         });
       });
     }
 
+    function renderDetail() {
+      const el = $("detail");
+      const f = fileByPath(state.active);
+      if (!f) {
+        el.innerHTML = `<div class="empty">Foto auswählen</div>`;
+        return;
+      }
+      el.innerHTML = `
+        <img class="preview" src="/api/preview?path=${encodeURIComponent(f.path)}" alt="" />
+        <div class="kv">
+          <div><span>Datei</span><b>${escapeHtml(f.name)}</b></div>
+          <div><span>DateTimeOriginal</span><b>${escapeHtml(fmt(f.original))}</b></div>
+          <div><span>Digitized</span><b>${escapeHtml(fmt(f.digitized))}</b></div>
+          <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
+          <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
+        </div>
+        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>. Unten siehst du die aktuell in der Datei gespeicherten Werte.</p>
+        <button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>
+      `;
+      $("btnUseExif")?.addEventListener("click", () => {
+        const parsed = toInputDate(f.original) || toInputDate(f.digitized) || toInputDate(f.modify);
+        if (!parsed) {
+          setStatus("Kein Datum in den EXIF-Daten vorhanden.", "err");
+          return;
+        }
+        $("date").value = parsed.date;
+        $("time").value = parsed.time;
+        setStatus(`Formular gesetzt auf ${fmt(f.original || f.digitized || f.modify)}.`, "ok");
+      });
+    }
+
     $("btnAll").addEventListener("click", () => {
       state.selected = new Set(state.files.map((f) => f.path));
+      if (!state.active && state.files[0]) state.active = state.files[0].path;
       renderFiles();
+      renderDetail();
       updateSave();
     });
     $("btnNone").addEventListener("click", () => {
@@ -248,6 +329,7 @@
         setStatus("Bitte ein Datum wählen.", "err");
         return;
       }
+      const keepActive = state.active;
       $("btnSave").disabled = true;
       setStatus(`Speichere ${state.selected.size} Datei(en)…`);
       const res = await fetch("/api/apply", {
@@ -272,10 +354,15 @@
         setStatus(`${data.written} Datei(en) gespeichert (nur EXIF).`, "ok");
       }
       await load(state.path);
-      updateSave();
+      if (keepActive && state.files.some((f) => f.path === keepActive)) {
+        state.active = keepActive;
+        state.selected = new Set([keepActive]);
+        renderFiles();
+        renderDetail();
+        updateSave();
+      }
     });
 
-    // default date empty — user must choose
     load("");
   </script>
 </body>
