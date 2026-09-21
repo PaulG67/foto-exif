@@ -50,7 +50,7 @@ def patch_exif_dates(
 
     before_sos = jpeg_scan_offset(raw)
     if before_sos is None:
-        raise ValueError("Ungültiges JPEG (kein SOS)")
+        raise ValueError("Ungueltiges JPEG (kein SOS)")
     before_payload = raw[before_sos:]
 
     try:
@@ -76,11 +76,27 @@ def patch_exif_dates(
     ):
         exif["Exif"].pop(tag, None)
 
-    out = piexif.insert(piexif.dump(exif), raw)
-    after_sos = jpeg_scan_offset(out)
-    if after_sos is None or out[after_sos:] != before_payload:
-        raise RuntimeError("Abbruch: Bilddaten hätten sich geändert")
+    exif_bytes = piexif.dump(exif)
+    tmp = path.with_name(path.name + ".exiftmp")
 
-    tmp = path.with_suffix(path.suffix + ".exiftmp")
-    tmp.write_bytes(out)
-    tmp.replace(path)
+    # piexif 1.1.x: bei Dateipfad ist das 3. Argument (Ausgabedatei) Pflicht
+    try:
+        maybe = piexif.insert(exif_bytes, raw)
+        if isinstance(maybe, (bytes, bytearray)):
+            tmp.write_bytes(bytes(maybe))
+        else:
+            piexif.insert(exif_bytes, str(path), str(tmp))
+    except (TypeError, ValueError):
+        piexif.insert(exif_bytes, str(path), str(tmp))
+
+    try:
+        out = tmp.read_bytes()
+        after_sos = jpeg_scan_offset(out)
+        if after_sos is None or out[after_sos:] != before_payload:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError("Abbruch: Bilddaten haetten sich geaendert")
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
