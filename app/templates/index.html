@@ -136,6 +136,7 @@
         <label><input type="checkbox" id="fModify" checked /> Modify</label>
       </div>
       <div class="spacer"></div>
+      <button type="button" id="btnReload">Daten neu laden</button>
       <button type="button" id="btnAll">Alle</button>
       <button type="button" id="btnNone">Keine</button>
       <button type="button" class="primary" id="btnSave" disabled>In Dateien speichern</button>
@@ -163,7 +164,13 @@
   </div>
 
   <script>
-    const state = { path: "", files: [], selected: new Set(), active: null };
+    const state = {
+      path: "",
+      files: [],
+      selected: new Set(),
+      active: null,
+      cacheBust: Date.now(),
+    };
     const $ = (id) => document.getElementById(id);
 
     function fmt(exif) {
@@ -187,6 +194,10 @@
         .replaceAll('"', "&quot;");
     }
 
+    function mediaUrl(kind, path) {
+      return `/api/${kind}?path=${encodeURIComponent(path)}&t=${state.cacheBust}`;
+    }
+
     function setStatus(msg, kind = "") {
       $("status").textContent = msg;
       $("status").className = "status" + (kind ? " " + kind : "");
@@ -200,25 +211,52 @@
       return state.files.find((f) => f.path === path) || null;
     }
 
-    async function load(path = "") {
-      setStatus("Lade…");
-      const res = await fetch("/api/browse?path=" + encodeURIComponent(path));
+    async function load(path = state.path, opts = {}) {
+      const {
+        preserveSelection = false,
+        statusMessage = null,
+        statusKind = "",
+        bustCache = false,
+      } = opts;
+
+      const keepSelected = preserveSelection ? new Set(state.selected) : null;
+      const keepActive = preserveSelection ? state.active : null;
+
+      if (bustCache) state.cacheBust = Date.now();
+      if (!statusMessage) setStatus("Lade…");
+
+      const res = await fetch("/api/browse?path=" + encodeURIComponent(path) + "&t=" + state.cacheBust);
       if (!res.ok) {
-        setStatus("Fehler beim Laden", "err");
-        return;
+        setStatus("Fehler beim Laden der Dateien.", "err");
+        return false;
       }
       const data = await res.json();
       state.path = data.path || "";
       state.files = data.files || [];
-      state.selected = new Set();
-      state.active = state.files[0]?.path || null;
-      if (state.active) state.selected.add(state.active);
+
+      if (keepSelected) {
+        state.selected = new Set([...keepSelected].filter((p) => state.files.some((f) => f.path === p)));
+        state.active =
+          (keepActive && state.files.some((f) => f.path === keepActive) && keepActive) ||
+          [...state.selected][0] ||
+          state.files[0]?.path ||
+          null;
+        if (state.active && !state.selected.size) state.selected.add(state.active);
+      } else {
+        state.selected = new Set();
+        state.active = state.files[0]?.path || null;
+        if (state.active) state.selected.add(state.active);
+      }
+
       renderCrumbs(data.crumbs || []);
       renderDirs(data.dirs || []);
       renderFiles();
       renderDetail();
-      setStatus(`${state.files.length} JPEG(s) in diesem Ordner.`);
       updateSave();
+
+      if (statusMessage) setStatus(statusMessage, statusKind);
+      else setStatus(`${state.files.length} JPEG(s) in diesem Ordner.`);
+      return true;
     }
 
     function renderCrumbs(crumbs) {
@@ -252,7 +290,7 @@
       el.innerHTML = state.files.map((f) => {
         const sel = state.selected.has(f.path) ? "selected" : "";
         return `<article class="card ${sel}" data-path="${escapeHtml(f.path)}">
-          <img src="/api/thumb?path=${encodeURIComponent(f.path)}" alt="" loading="lazy" />
+          <img src="${mediaUrl("thumb", f.path)}" alt="" loading="lazy" />
           <div class="meta">
             <strong>${escapeHtml(f.name)}</strong>
             Original: ${escapeHtml(fmt(f.original))}<br/>
@@ -286,7 +324,7 @@
         return;
       }
       el.innerHTML = `
-        <img class="preview" src="/api/preview?path=${encodeURIComponent(f.path)}" alt="" />
+        <img class="preview" src="${mediaUrl("preview", f.path)}" alt="" />
         <div class="kv">
           <div><span>Datei</span><b>${escapeHtml(f.name)}</b></div>
           <div><span>DateTimeOriginal</span><b>${escapeHtml(fmt(f.original))}</b></div>
@@ -294,7 +332,7 @@
           <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
-        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>. Unten siehst du die aktuell in der Datei gespeicherten Werte.</p>
+        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>. Hier siehst du die aktuell in der Datei gespeicherten Werte.</p>
         <button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>
       `;
       $("btnUseExif")?.addEventListener("click", () => {
@@ -308,6 +346,15 @@
         setStatus(`Formular gesetzt auf ${fmt(f.original || f.digitized || f.modify)}.`, "ok");
       });
     }
+
+    $("btnReload").addEventListener("click", async () => {
+      await load(state.path, {
+        preserveSelection: true,
+        bustCache: true,
+        statusMessage: "Daten neu geladen — EXIF-Vorschau aktualisiert.",
+        statusKind: "ok",
+      });
+    });
 
     $("btnAll").addEventListener("click", () => {
       state.selected = new Set(state.files.map((f) => f.path));
@@ -329,38 +376,64 @@
         setStatus("Bitte ein Datum wählen.", "err");
         return;
       }
-      const keepActive = state.active;
+      const count = state.selected.size;
       $("btnSave").disabled = true;
-      setStatus(`Speichere ${state.selected.size} Datei(en)…`);
-      const res = await fetch("/api/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          paths: [...state.selected],
-          date,
-          time,
-          fields: {
-            original: $("fOriginal").checked,
-            digitized: $("fDigitized").checked,
-            modify: $("fModify").checked,
-          },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || data.errors?.length) {
-        const err = data.errors?.[0]?.error || data.error || "Fehler";
-        setStatus(`Teilweise/Fehler: ${err}`, "err");
-      } else {
-        setStatus(`${data.written} Datei(en) gespeichert (nur EXIF).`, "ok");
-      }
-      await load(state.path);
-      if (keepActive && state.files.some((f) => f.path === keepActive)) {
-        state.active = keepActive;
-        state.selected = new Set([keepActive]);
-        renderFiles();
-        renderDetail();
+      setStatus(`Speichere ${count} Datei(en) auf dem Server…`);
+
+      let data;
+      try {
+        const res = await fetch("/api/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            paths: [...state.selected],
+            date,
+            time,
+            fields: {
+              original: $("fOriginal").checked,
+              digitized: $("fDigitized").checked,
+              modify: $("fModify").checked,
+            },
+          }),
+        });
+        data = await res.json();
+        if (!res.ok && !data) throw new Error("Speichern fehlgeschlagen");
+      } catch (err) {
+        setStatus(`Speichern fehlgeschlagen: ${err.message || err}`, "err");
         updateSave();
+        return;
       }
+
+      const written = data.written || 0;
+      const errors = data.errors || [];
+      let msg;
+      let kind;
+      if (written > 0 && errors.length === 0) {
+        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}. Vorschau aktualisiert.`;
+        kind = "ok";
+      } else if (written > 0) {
+        msg = `${written} Datei(en) gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "unbekannt"}`;
+        kind = "err";
+      } else {
+        msg = `Nicht gespeichert: ${data.error || errors[0]?.error || "unbekannter Fehler"}`;
+        kind = "err";
+      }
+
+      // Server-Antwort direkt in die lokale Liste übernehmen
+      for (const file of data.files || []) {
+        const local = fileByPath(file.path);
+        if (!local) continue;
+        local.original = file.original;
+        local.digitized = file.digitized;
+        local.modify = file.modify;
+      }
+
+      await load(state.path, {
+        preserveSelection: true,
+        bustCache: true,
+        statusMessage: msg,
+        statusKind: kind,
+      });
     });
 
     load("");
