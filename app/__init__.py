@@ -1,0 +1,1 @@
+# Foto-exif package

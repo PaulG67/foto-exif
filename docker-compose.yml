@@ -1,0 +1,15 @@
+services:
+  foto-exif:
+    image: ghcr.io/paulg67/foto-exif:latest
+    container_name: foto-exif
+    ports:
+      - "8791:8791"
+    environment:
+      - PUID=99
+      - PGID=100
+      - TZ=Europe/Zurich
+      - PORT=8791
+      - PHOTOS_ROOT=/photos
+    volumes:
+      - /mnt/user/photos:/photos:rw
+    restart: unless-stopped

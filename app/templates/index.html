@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Foto-exif</title>
+  <link rel="icon" href="/static/icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #e9eef2;
+      --panel: #f7f9fb;
+      --ink: #15202b;
+      --muted: #5a6b7a;
+      --line: #c5d0da;
+      --accent: #0d7a6f;
+      --accent-hover: #0a6259;
+      --warn: #b45309;
+      --ok: #16794c;
+      --danger: #b42318;
+      --shadow: 0 10px 28px rgba(21,32,43,.08);
+      --radius: 14px;
+      --font: "IBM Plex Sans", system-ui, sans-serif;
+      --display: "Fraunces", Georgia, serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: var(--font); color: var(--ink);
+      background:
+        radial-gradient(1000px 500px at 8% -10%, #d7e8e4 0%, transparent 55%),
+        radial-gradient(800px 420px at 100% 0%, #d9e2ec 0%, transparent 50%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    .wrap { width: min(1200px, calc(100% - 2rem)); margin: 0 auto; padding: 1.5rem 0 3rem; }
+    header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
+    header img { width: 52px; height: 52px; border-radius: 12px; }
+    header h1 { margin: 0; font-family: var(--display); font-size: 1.9rem; }
+    header p { margin: .2rem 0 0; color: var(--muted); }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: .75rem; align-items: end;
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 1rem; margin-bottom: 1rem;
+    }
+    .field { display: grid; gap: .3rem; }
+    .field label { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+    input[type="date"], input[type="time"] {
+      font: inherit; padding: .55rem .7rem; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+    }
+    .checks { display: grid; gap: .3rem; }
+    .checks label { display: flex; gap: .4rem; align-items: center; font-size: .92rem; }
+    button {
+      font: inherit; font-weight: 600; border: none; border-radius: 10px;
+      padding: .65rem 1rem; cursor: pointer; background: #fff; border: 1px solid var(--line);
+    }
+    button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+    button.primary:hover { background: var(--accent-hover); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .spacer { flex: 1; }
+    .status { min-height: 1.3rem; color: var(--muted); margin: 0 0 1rem; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--danger); }
+    .crumbs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .75rem; align-items: center; }
+    .crumbs a, .crumbs button.link {
+      background: none; border: none; color: var(--accent); padding: 0; font-weight: 600; cursor: pointer;
+    }
+    .crumbs span { color: var(--muted); }
+    .layout { display: grid; grid-template-columns: 220px 1fr; gap: 1rem; }
+    @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0; padding: .85rem 1rem; border-bottom: 1px solid var(--line);
+      font-family: var(--display); font-size: 1.1rem;
+    }
+    .dirs { list-style: none; margin: 0; padding: .5rem; max-height: 70vh; overflow: auto; }
+    .dirs li button {
+      width: 100%; text-align: left; border: none; background: transparent; padding: .55rem .65rem; border-radius: 8px;
+    }
+    .dirs li button:hover { background: #e7f1ef; }
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: .75rem; padding: 1rem; max-height: 70vh; overflow: auto;
+    }
+    .card {
+      border: 2px solid transparent; border-radius: 12px; overflow: hidden; background: #fff; cursor: pointer;
+    }
+    .card.selected { border-color: var(--accent); }
+    .card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #d7dee6; }
+    .card .meta { padding: .45rem .55rem .6rem; font-size: .75rem; color: var(--muted); }
+    .card .meta strong { display: block; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .empty { padding: 2rem; text-align: center; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <img src="/static/icon.svg" alt="" />
+      <div>
+        <h1>Foto-exif</h1>
+        <p>Aufnahmedatum setzen — speichert direkt in die Dateien unter <code>/photos</code>.</p>
+      </div>
+    </header>
+
+    <div class="toolbar">
+      <div class="field">
+        <label for="date">Aufnahmedatum</label>
+        <input type="date" id="date" />
+      </div>
+      <div class="field">
+        <label for="time">Uhrzeit</label>
+        <input type="time" id="time" value="12:00" />
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="fOriginal" checked /> DateTimeOriginal</label>
+        <label><input type="checkbox" id="fDigitized" checked /> Digitized</label>
+        <label><input type="checkbox" id="fModify" checked /> Modify</label>
+      </div>
+      <div class="spacer"></div>
+      <button type="button" id="btnAll">Alle</button>
+      <button type="button" id="btnNone">Keine</button>
+      <button type="button" class="primary" id="btnSave" disabled>In Dateien speichern</button>
+    </div>
+
+    <p class="status" id="status">Lade Ordner…</p>
+    <nav class="crumbs" id="crumbs"></nav>
+
+    <div class="layout">
+      <aside class="panel">
+        <h2>Ordner</h2>
+        <ul class="dirs" id="dirs"></ul>
+      </aside>
+      <section class="panel">
+        <h2>Fotos</h2>
+        <div class="grid" id="grid"><div class="empty">Keine JPEGs</div></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const state = { path: "", files: [], selected: new Set() };
+    const $ = (id) => document.getElementById(id);
+
+    function fmt(exif) {
+      if (!exif) return "—";
+      const m = exif.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})/);
+      if (!m) return exif;
+      return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}`;
+    }
+
+    function setStatus(msg, kind = "") {
+      $("status").textContent = msg;
+      $("status").className = "status" + (kind ? " " + kind : "");
+    }
+
+    function updateSave() {
+      $("btnSave").disabled = state.selected.size === 0;
+    }
+
+    async function load(path = "") {
+      setStatus("Lade…");
+      const res = await fetch("/api/browse?path=" + encodeURIComponent(path));
+      if (!res.ok) {
+        setStatus("Fehler beim Laden", "err");
+        return;
+      }
+      const data = await res.json();
+      state.path = data.path || "";
+      state.files = data.files || [];
+      state.selected = new Set();
+      renderCrumbs(data.crumbs || []);
+      renderDirs(data.dirs || []);
+      renderFiles();
+      setStatus(`${state.files.length} JPEG(s) in diesem Ordner.`);
+      updateSave();
+    }
+
+    function renderCrumbs(crumbs) {
+      const el = $("crumbs");
+      let html = `<button type="button" class="link" data-path="">/photos</button>`;
+      for (const c of crumbs) {
+        html += `<span>/</span><button type="button" class="link" data-path="${c.path}">${c.name}</button>`;
+      }
+      el.innerHTML = html;
+      el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => load(b.dataset.path)));
+    }
+
+    function renderDirs(dirs) {
+      const el = $("dirs");
+      if (!dirs.length) {
+        el.innerHTML = `<li class="empty" style="padding:.75rem">Keine Unterordner</li>`;
+        return;
+      }
+      el.innerHTML = dirs.map((d) =>
+        `<li><button type="button" data-path="${d.path}">📁 ${d.name}</button></li>`
+      ).join("");
+      el.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => load(b.dataset.path)));
+    }
+
+    function renderFiles() {
+      const el = $("grid");
+      if (!state.files.length) {
+        el.innerHTML = `<div class="empty">Keine JPEGs in diesem Ordner.</div>`;
+        return;
+      }
+      el.innerHTML = state.files.map((f) => {
+        const sel = state.selected.has(f.path) ? "selected" : "";
+        return `<article class="card ${sel}" data-path="${f.path}">
+          <img src="/api/thumb?path=${encodeURIComponent(f.path)}" alt="" loading="lazy" />
+          <div class="meta"><strong>${f.name}</strong>${fmt(f.original)}</div>
+        </article>`;
+      }).join("");
+      el.querySelectorAll(".card").forEach((card) => {
+        card.addEventListener("click", (e) => {
+          const p = card.dataset.path;
+          if (e.shiftKey || e.metaKey || e.ctrlKey) {
+            if (state.selected.has(p)) state.selected.delete(p);
+            else state.selected.add(p);
+          } else {
+            state.selected = new Set([p]);
+          }
+          renderFiles();
+          updateSave();
+          setStatus(`${state.selected.size} ausgewählt`);
+        });
+      });
+    }
+
+    $("btnAll").addEventListener("click", () => {
+      state.selected = new Set(state.files.map((f) => f.path));
+      renderFiles();
+      updateSave();
+    });
+    $("btnNone").addEventListener("click", () => {
+      state.selected = new Set();
+      renderFiles();
+      updateSave();
+    });
+
+    $("btnSave").addEventListener("click", async () => {
+      const date = $("date").value;
+      const time = $("time").value || "12:00";
+      if (!date) {
+        setStatus("Bitte ein Datum wählen.", "err");
+        return;
+      }
+      $("btnSave").disabled = true;
+      setStatus(`Speichere ${state.selected.size} Datei(en)…`);
+      const res = await fetch("/api/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          paths: [...state.selected],
+          date,
+          time,
+          fields: {
+            original: $("fOriginal").checked,
+            digitized: $("fDigitized").checked,
+            modify: $("fModify").checked,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.errors?.length) {
+        const err = data.errors?.[0]?.error || data.error || "Fehler";
+        setStatus(`Teilweise/Fehler: ${err}`, "err");
+      } else {
+        setStatus(`${data.written} Datei(en) gespeichert (nur EXIF).`, "ok");
+      }
+      await load(state.path);
+      updateSave();
+    });
+
+    // default date empty — user must choose
+    load("");
+  </script>
+</body>
+</html>
