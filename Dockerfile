@@ -7,6 +7,7 @@ LABEL org.opencontainers.image.source="https://github.com/PaulG67/foto-exif"
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PHOTOS_ROOT=/photos \
+    EXPORT_ROOT=/export \
     PORT=8791 \
     PUID=99 \
     PGID=100
@@ -25,9 +26,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh \
-    && mkdir -p /photos
+    && mkdir -p /photos /export
 
-VOLUME ["/photos"]
+VOLUME ["/photos", "/export"]
 
 EXPOSE 8791
 

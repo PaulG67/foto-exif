@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -15,29 +16,63 @@ from app.exif_utils import patch_exif_dates, read_exif_dates
 
 JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
+EXPORT_ROOT = Path(os.environ.get("EXPORT_ROOT", "/export")).resolve()
 PORT = int(os.environ.get("PORT", "8791"))
+
+ROOTS = {
+    "photos": PHOTOS_ROOT,
+    "export": EXPORT_ROOT,
+}
 
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
 
-    def safe_path(rel: str) -> Path:
+    def root_of(name: str | None) -> Path:
+        key = (name or "photos").strip().lower()
+        if key not in ROOTS:
+            abort(400, "Ungueltiger Root")
+        return ROOTS[key]
+
+    def safe_path(rel: str, root_name: str = "photos") -> Path:
+        root = root_of(root_name)
         rel = (rel or "").replace("\\", "/").lstrip("/")
         if ".." in rel.split("/"):
-            abort(400, "Ungültiger Pfad")
-        target = (PHOTOS_ROOT / rel).resolve()
+            abort(400, "Ungueltiger Pfad")
+        target = (root / rel).resolve()
         try:
-            target.relative_to(PHOTOS_ROOT)
+            target.relative_to(root)
         except ValueError:
-            abort(400, "Pfad außerhalb von /photos")
+            abort(400, f"Pfad ausserhalb von /{root_name}")
         return target
 
-    def rel_of(path: Path) -> str:
-        return path.resolve().relative_to(PHOTOS_ROOT).as_posix()
+    def rel_of(path: Path, root_name: str = "photos") -> str:
+        root = root_of(root_name)
+        return path.resolve().relative_to(root).as_posix()
+
+    def unique_dest(dest_dir: Path, name: str) -> Path:
+        dest = dest_dir / name
+        if not dest.exists():
+            return dest
+        stem = Path(name).stem
+        suffix = Path(name).suffix
+        n = 1
+        while True:
+            candidate = dest_dir / f"{stem}_{n}{suffix}"
+            if not candidate.exists():
+                return candidate
+            n += 1
 
     @app.get("/health")
     def health():
-        return {"ok": True, "photos": str(PHOTOS_ROOT), "exists": PHOTOS_ROOT.is_dir()}
+        return {
+            "ok": True,
+            "photos": str(PHOTOS_ROOT),
+            "photos_exists": PHOTOS_ROOT.is_dir(),
+            "export": str(EXPORT_ROOT),
+            "export_exists": EXPORT_ROOT.is_dir(),
+        }
 
     @app.get("/")
     def index():
@@ -45,8 +80,9 @@ def create_app() -> Flask:
 
     @app.get("/api/browse")
     def browse():
+        root_name = request.args.get("root", "photos")
         rel = request.args.get("path", "")
-        folder = safe_path(rel)
+        folder = safe_path(rel, root_name)
         if not folder.exists():
             abort(404, "Ordner nicht gefunden")
         if not folder.is_dir():
@@ -63,13 +99,13 @@ def create_app() -> Flask:
             if entry.name.startswith("."):
                 continue
             if entry.is_dir():
-                dirs.append({"name": entry.name, "path": rel_of(entry)})
+                dirs.append({"name": entry.name, "path": rel_of(entry, root_name)})
             elif entry.is_file() and entry.suffix.lower() in JPEG_EXTS:
                 dates = read_exif_dates(entry)
                 files.append(
                     {
                         "name": entry.name,
-                        "path": rel_of(entry),
+                        "path": rel_of(entry, root_name),
                         "size": entry.stat().st_size,
                         "original": dates.get("original"),
                         "digitized": dates.get("digitized"),
@@ -86,7 +122,8 @@ def create_app() -> Flask:
 
         return jsonify(
             {
-                "root": str(PHOTOS_ROOT),
+                "root": root_name,
+                "rootPath": str(root_of(root_name)),
                 "path": rel,
                 "crumbs": crumbs,
                 "dirs": dirs,
@@ -96,7 +133,8 @@ def create_app() -> Flask:
 
     @app.get("/api/thumb")
     def thumb():
-        path = safe_path(request.args.get("path", ""))
+        root_name = request.args.get("root", "photos")
+        path = safe_path(request.args.get("path", ""), root_name)
         if not path.is_file():
             abort(404)
         try:
@@ -112,7 +150,8 @@ def create_app() -> Flask:
 
     @app.get("/api/preview")
     def preview():
-        path = safe_path(request.args.get("path", ""))
+        root_name = request.args.get("root", "photos")
+        path = safe_path(request.args.get("path", ""), root_name)
         if not path.is_file():
             abort(404)
         return send_file(path)
@@ -120,6 +159,7 @@ def create_app() -> Flask:
     @app.post("/api/apply")
     def apply_dates():
         data = request.get_json(force=True, silent=True) or {}
+        root_name = data.get("root") or "photos"
         paths = data.get("paths") or []
         date_str = data.get("date")
         time_str = data.get("time") or "12:00:00"
@@ -130,19 +170,19 @@ def create_app() -> Flask:
 
         exif_date = to_exif(date_str, time_str)
         if not exif_date:
-            return jsonify({"ok": False, "error": "Ungültiges Datum/Uhrzeit"}), 400
+            return jsonify({"ok": False, "error": "Ungueltiges Datum/Uhrzeit"}), 400
 
         set_original = bool(opts.get("original", True))
         set_digitized = bool(opts.get("digitized", True))
         set_modify = bool(opts.get("modify", True))
         if not (set_original or set_digitized or set_modify):
-            return jsonify({"ok": False, "error": "Mindestens ein Feld wählen"}), 400
+            return jsonify({"ok": False, "error": "Mindestens ein Feld waehlen"}), 400
 
         written = []
         errors = []
         for rel in paths:
             try:
-                path = safe_path(rel)
+                path = safe_path(rel, root_name)
                 if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
                     raise ValueError("Keine JPEG-Datei")
                 patch_exif_dates(
@@ -164,6 +204,45 @@ def create_app() -> Flask:
                 "files": written,
                 "errors": errors,
                 "date": exif_date,
+            }
+        )
+
+    @app.post("/api/move-to-export")
+    def move_to_export():
+        data = request.get_json(force=True, silent=True) or {}
+        paths = data.get("paths") or []
+        if not paths:
+            return jsonify({"ok": False, "error": "Keine Dateien"}), 400
+
+        EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
+        moved = []
+        errors = []
+
+        for rel in paths:
+            try:
+                src = safe_path(rel, "photos")
+                if not src.is_file() or src.suffix.lower() not in JPEG_EXTS:
+                    raise ValueError("Keine JPEG-Datei")
+                dest = unique_dest(EXPORT_ROOT, src.name)
+                shutil.move(str(src), str(dest))
+                dates = read_exif_dates(dest)
+                moved.append(
+                    {
+                        "from": rel,
+                        "to": dest.name,
+                        "path": dest.name,
+                        **dates,
+                    }
+                )
+            except Exception as exc:
+                errors.append({"path": rel, "error": str(exc)})
+
+        return jsonify(
+            {
+                "ok": len(errors) == 0,
+                "moved": len(moved),
+                "files": moved,
+                "errors": errors,
             }
         )
 

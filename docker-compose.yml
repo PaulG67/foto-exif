@@ -10,6 +10,8 @@ services:
       - TZ=Europe/Zurich
       - PORT=8791
       - PHOTOS_ROOT=/photos
+      - EXPORT_ROOT=/export
     volumes:
       - /mnt/user/photos:/photos:rw
+      - /mnt/user/photos/export:/export:rw
     restart: unless-stopped

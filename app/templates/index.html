@@ -17,7 +17,6 @@
       --line: #c5d0da;
       --accent: #0d7a6f;
       --accent-hover: #0a6259;
-      --warn: #b45309;
       --ok: #16794c;
       --danger: #b42318;
       --shadow: 0 10px 28px rgba(21,32,43,.08);
@@ -35,10 +34,16 @@
       min-height: 100vh;
     }
     .wrap { width: min(1280px, calc(100% - 2rem)); margin: 0 auto; padding: 1.5rem 0 3rem; }
-    header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
+    header { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
     header img { width: 52px; height: 52px; border-radius: 12px; }
     header h1 { margin: 0; font-family: var(--display); font-size: 1.9rem; }
     header p { margin: .2rem 0 0; color: var(--muted); }
+    .tabs { display: flex; gap: .4rem; margin-bottom: 1rem; }
+    .tabs button {
+      border: 1px solid var(--line); background: #fff; border-radius: 999px;
+      padding: .55rem 1rem; font-weight: 600; cursor: pointer;
+    }
+    .tabs button.active { background: var(--accent); color: #fff; border-color: transparent; }
     .toolbar {
       display: flex; flex-wrap: wrap; gap: .75rem; align-items: end;
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -68,7 +73,10 @@
     }
     .crumbs span { color: var(--muted); }
     .layout { display: grid; grid-template-columns: 200px 1fr 280px; gap: 1rem; align-items: start; }
-    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+    .layout.export-mode { grid-template-columns: 1fr 280px; }
+    @media (max-width: 980px) {
+      .layout, .layout.export-mode { grid-template-columns: 1fr; }
+    }
     .panel {
       background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); overflow: hidden;
@@ -109,6 +117,7 @@
       font-size: .84rem; color: var(--muted); background: #eef6f5;
       border: 1px solid #c9e2de; border-radius: 10px; padding: .7rem .8rem;
     }
+    .photos-only.hidden { display: none !important; }
   </style>
 </head>
 <body>
@@ -117,20 +126,25 @@
       <img src="/static/icon.svg" alt="" />
       <div>
         <h1>Foto-exif</h1>
-        <p>Aufnahmedatum setzen — speichert direkt in die Dateien unter <code>/photos</code>.</p>
+        <p id="subtitle">Fotos bearbeiten unter <code>/photos</code></p>
       </div>
     </header>
 
+    <div class="tabs">
+      <button type="button" class="active" data-tab="photos" id="tabPhotos">Fotos bearbeiten</button>
+      <button type="button" data-tab="export" id="tabExport">Export überwachen</button>
+    </div>
+
     <div class="toolbar">
-      <div class="field">
+      <div class="field photos-only" id="dateFields">
         <label for="date">Aufnahmedatum</label>
         <input type="date" id="date" />
       </div>
-      <div class="field">
+      <div class="field photos-only">
         <label for="time">Uhrzeit</label>
         <input type="time" id="time" value="12:00" />
       </div>
-      <div class="checks">
+      <div class="checks photos-only">
         <label><input type="checkbox" id="fOriginal" checked /> DateTimeOriginal</label>
         <label><input type="checkbox" id="fDigitized" checked /> Digitized</label>
         <label><input type="checkbox" id="fModify" checked /> Modify</label>
@@ -139,19 +153,20 @@
       <button type="button" id="btnReload">Daten neu laden</button>
       <button type="button" id="btnAll">Alle</button>
       <button type="button" id="btnNone">Keine</button>
-      <button type="button" class="primary" id="btnSave" disabled>In Dateien speichern</button>
+      <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
+      <button type="button" class="primary photos-only" id="btnMove" disabled>Nach Export verschieben</button>
     </div>
 
     <p class="status" id="status">Lade Ordner…</p>
     <nav class="crumbs" id="crumbs"></nav>
 
     <div class="layout">
-      <aside class="panel">
+      <aside class="panel" id="dirsPanel">
         <h2>Ordner</h2>
         <ul class="dirs" id="dirs"></ul>
       </aside>
       <section class="panel">
-        <h2>Fotos</h2>
+        <h2 id="gridTitle">Fotos</h2>
         <div class="grid" id="grid"><div class="empty">Keine JPEGs</div></div>
       </section>
       <aside class="panel">
@@ -165,6 +180,7 @@
 
   <script>
     const state = {
+      root: "photos",
       path: "",
       files: [],
       selected: new Set(),
@@ -195,7 +211,7 @@
     }
 
     function mediaUrl(kind, path) {
-      return `/api/${kind}?path=${encodeURIComponent(path)}&t=${state.cacheBust}`;
+      return `/api/${kind}?root=${encodeURIComponent(state.root)}&path=${encodeURIComponent(path)}&t=${state.cacheBust}`;
     }
 
     function setStatus(msg, kind = "") {
@@ -203,12 +219,35 @@
       $("status").className = "status" + (kind ? " " + kind : "");
     }
 
-    function updateSave() {
-      $("btnSave").disabled = state.selected.size === 0;
+    function updateButtons() {
+      const hasSel = state.selected.size > 0;
+      $("btnSave").disabled = !hasSel || state.root !== "photos";
+      $("btnMove").disabled = !hasSel || state.root !== "photos";
     }
 
     function fileByPath(path) {
       return state.files.find((f) => f.path === path) || null;
+    }
+
+    function setTab(root) {
+      state.root = root;
+      state.path = "";
+      state.selected = new Set();
+      state.active = null;
+      document.querySelectorAll(".tabs button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === root);
+      });
+      document.querySelectorAll(".photos-only").forEach((el) => {
+        el.classList.toggle("hidden", root !== "photos");
+      });
+      $("dirsPanel").style.display = root === "export" ? "none" : "";
+      document.querySelector(".layout").classList.toggle("export-mode", root === "export");
+      $("subtitle").innerHTML =
+        root === "photos"
+          ? 'Fotos bearbeiten unter <code>/photos</code>'
+          : 'Export-Ordner <code>/export</code> — fertige Dateien mit Vorschau';
+      $("gridTitle").textContent = root === "photos" ? "Fotos" : "Export";
+      load("", { bustCache: true });
     }
 
     async function load(path = state.path, opts = {}) {
@@ -221,11 +260,12 @@
 
       const keepSelected = preserveSelection ? new Set(state.selected) : null;
       const keepActive = preserveSelection ? state.active : null;
-
       if (bustCache) state.cacheBust = Date.now();
       if (!statusMessage) setStatus("Lade…");
 
-      const res = await fetch("/api/browse?path=" + encodeURIComponent(path) + "&t=" + state.cacheBust);
+      const res = await fetch(
+        `/api/browse?root=${encodeURIComponent(state.root)}&path=${encodeURIComponent(path)}&t=${state.cacheBust}`
+      );
       if (!res.ok) {
         setStatus("Fehler beim Laden der Dateien.", "err");
         return false;
@@ -252,16 +292,17 @@
       renderDirs(data.dirs || []);
       renderFiles();
       renderDetail();
-      updateSave();
+      updateButtons();
 
       if (statusMessage) setStatus(statusMessage, statusKind);
-      else setStatus(`${state.files.length} JPEG(s) in diesem Ordner.`);
+      else setStatus(`${state.files.length} JPEG(s) in ${state.root === "export" ? "Export" : "diesem Ordner"}.`);
       return true;
     }
 
     function renderCrumbs(crumbs) {
       const el = $("crumbs");
-      let html = `<button type="button" class="link" data-path="">/photos</button>`;
+      const rootLabel = state.root === "export" ? "/export" : "/photos";
+      let html = `<button type="button" class="link" data-path="">${rootLabel}</button>`;
       for (const c of crumbs) {
         html += `<span>/</span><button type="button" class="link" data-path="${escapeHtml(c.path)}">${escapeHtml(c.name)}</button>`;
       }
@@ -271,6 +312,10 @@
 
     function renderDirs(dirs) {
       const el = $("dirs");
+      if (state.root === "export") {
+        el.innerHTML = "";
+        return;
+      }
       if (!dirs.length) {
         el.innerHTML = `<li class="empty" style="padding:.75rem">Keine Unterordner</li>`;
         return;
@@ -284,7 +329,7 @@
     function renderFiles() {
       const el = $("grid");
       if (!state.files.length) {
-        el.innerHTML = `<div class="empty">Keine JPEGs in diesem Ordner.</div>`;
+        el.innerHTML = `<div class="empty">${state.root === "export" ? "Export ist leer." : "Keine JPEGs in diesem Ordner."}</div>`;
         return;
       }
       el.innerHTML = state.files.map((f) => {
@@ -310,7 +355,7 @@
           state.active = p;
           renderFiles();
           renderDetail();
-          updateSave();
+          updateButtons();
           setStatus(`${state.selected.size} ausgewählt`);
         });
       });
@@ -332,8 +377,8 @@
           <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
-        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>. Hier siehst du die aktuell in der Datei gespeicherten Werte.</p>
-        <button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>
+        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>.</p>
+        ${state.root === "photos" ? `<button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
       `;
       $("btnUseExif")?.addEventListener("click", () => {
         const parsed = toInputDate(f.original) || toInputDate(f.digitized) || toInputDate(f.modify);
@@ -347,11 +392,14 @@
       });
     }
 
+    $("tabPhotos").addEventListener("click", () => setTab("photos"));
+    $("tabExport").addEventListener("click", () => setTab("export"));
+
     $("btnReload").addEventListener("click", async () => {
       await load(state.path, {
         preserveSelection: true,
         bustCache: true,
-        statusMessage: "Daten neu geladen — EXIF-Vorschau aktualisiert.",
+        statusMessage: "Daten neu geladen — Vorschau aktualisiert.",
         statusKind: "ok",
       });
     });
@@ -361,12 +409,12 @@
       if (!state.active && state.files[0]) state.active = state.files[0].path;
       renderFiles();
       renderDetail();
-      updateSave();
+      updateButtons();
     });
     $("btnNone").addEventListener("click", () => {
       state.selected = new Set();
       renderFiles();
-      updateSave();
+      updateButtons();
     });
 
     $("btnSave").addEventListener("click", async () => {
@@ -376,16 +424,15 @@
         setStatus("Bitte ein Datum wählen.", "err");
         return;
       }
-      const count = state.selected.size;
       $("btnSave").disabled = true;
-      setStatus(`Speichere ${count} Datei(en) auf dem Server…`);
-
+      setStatus(`Speichere ${state.selected.size} Datei(en)…`);
       let data;
       try {
         const res = await fetch("/api/apply", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            root: "photos",
             paths: [...state.selected],
             date,
             time,
@@ -397,35 +444,24 @@
           }),
         });
         data = await res.json();
-        if (!res.ok && !data) throw new Error("Speichern fehlgeschlagen");
       } catch (err) {
         setStatus(`Speichern fehlgeschlagen: ${err.message || err}`, "err");
-        updateSave();
+        updateButtons();
         return;
       }
 
       const written = data.written || 0;
       const errors = data.errors || [];
-      let msg;
-      let kind;
-      if (written > 0 && errors.length === 0) {
-        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}. Vorschau aktualisiert.`;
+      let msg, kind;
+      if (written > 0 && !errors.length) {
+        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}.`;
         kind = "ok";
       } else if (written > 0) {
-        msg = `${written} Datei(en) gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "unbekannt"}`;
+        msg = `${written} gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
         kind = "err";
       } else {
-        msg = `Nicht gespeichert: ${data.error || errors[0]?.error || "unbekannter Fehler"}`;
+        msg = `Nicht gespeichert: ${data.error || errors[0]?.error || "?"}`;
         kind = "err";
-      }
-
-      // Server-Antwort direkt in die lokale Liste übernehmen
-      for (const file of data.files || []) {
-        const local = fileByPath(file.path);
-        if (!local) continue;
-        local.original = file.original;
-        local.digitized = file.digitized;
-        local.modify = file.modify;
       }
 
       await load(state.path, {
@@ -436,7 +472,50 @@
       });
     });
 
-    load("");
+    $("btnMove").addEventListener("click", async () => {
+      const count = state.selected.size;
+      if (!count) return;
+      if (!confirm(`${count} Foto(s) nach /export verschieben?`)) return;
+
+      $("btnMove").disabled = true;
+      setStatus(`Verschiebe ${count} Datei(en) nach Export…`);
+      let data;
+      try {
+        const res = await fetch("/api/move-to-export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paths: [...state.selected] }),
+        });
+        data = await res.json();
+      } catch (err) {
+        setStatus(`Verschieben fehlgeschlagen: ${err.message || err}`, "err");
+        updateButtons();
+        return;
+      }
+
+      const moved = data.moved || 0;
+      const errors = data.errors || [];
+      let msg, kind;
+      if (moved > 0 && !errors.length) {
+        msg = `${moved} Datei(en) nach Export verschoben. Reiter „Export überwachen“ zeigt sie.`;
+        kind = "ok";
+      } else if (moved > 0) {
+        msg = `${moved} verschoben, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
+        kind = "err";
+      } else {
+        msg = `Nicht verschoben: ${data.error || errors[0]?.error || "?"}`;
+        kind = "err";
+      }
+
+      await load(state.path, {
+        preserveSelection: false,
+        bustCache: true,
+        statusMessage: msg,
+        statusKind: kind,
+      });
+    });
+
+    setTab("photos");
   </script>
 </body>
 </html>

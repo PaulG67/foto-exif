@@ -14,7 +14,7 @@ Foto-exif setzt EXIF-Aufnahmedaten (DateTimeOriginal) fuer gescannte JPEGs, dami
 &#13;
 SETUP / Vorlage installieren (Unraid-Terminal):&#13;
 bash &lt;(curl -fsSL https://raw.githubusercontent.com/PaulG67/foto-exif/main/unraid/install-template.sh)&#13;
-Danach: Docker - Container hinzufuegen - Template foto-exif - Photos-Pfad setzen - Apply.&#13;
+Danach: Docker - Container hinzufuegen - Template foto-exif - Photos- und Export-Pfad setzen - Apply.&#13;
 Updates: Docker - foto-exif - Force Update. Neue Felder nur mit Edit - Apply.
   </Overview>
   <Category>MediaApp:Photos Tools:Utilities</Category>
@@ -31,9 +31,11 @@ Updates: Docker - foto-exif - Force Update. Neue Felder nur mit Edit - Apply.
 
   <Config Name="WebUI Port" Target="8791" Default="8791" Mode="tcp" Description="Web-Oberflaeche Foto-exif" Type="Port" Display="always" Required="true" Mask="false">8791</Config>
   <Config Name="Photos" Target="/photos" Default="/mnt/user/photos" Mode="rw" Description="Foto-/Scan-Ordner mit Schreibzugriff (JPEGs)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/photos</Config>
+  <Config Name="Export" Target="/export" Default="/mnt/user/photos/export" Mode="rw" Description="Export-Ordner: fertige Fotos hierhin verschieben und im Reiter Export ueberwachen" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/photos/export</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="rw" Description="User-ID (Unraid nobody = 99)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="rw" Description="Group-ID (Unraid users = 100)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="TZ" Target="TZ" Default="Europe/Zurich" Mode="rw" Description="Zeitzone" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Zurich</Config>
   <Config Name="PORT" Target="PORT" Default="8791" Mode="rw" Description="Interner Port (meist unveraendert lassen)" Type="Variable" Display="advanced" Required="false" Mask="false">8791</Config>
   <Config Name="PHOTOS_ROOT" Target="PHOTOS_ROOT" Default="/photos" Mode="rw" Description="Pfad im Container zum Foto-Volume" Type="Variable" Display="advanced" Required="false" Mask="false">/photos</Config>
+  <Config Name="EXPORT_ROOT" Target="EXPORT_ROOT" Default="/export" Mode="rw" Description="Pfad im Container zum Export-Volume" Type="Variable" Display="advanced" Required="false" Mask="false">/export</Config>
 </Container>

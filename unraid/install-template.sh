@@ -26,6 +26,10 @@ if ! grep -q 'Name="Photos"' "${USER_XML}"; then
   echo "FEHLER: Vorlage enthaelt keinen Photos-Pfad — Abbruch."
   exit 1
 fi
+if ! grep -q 'Name="Export"' "${USER_XML}"; then
+  echo "FEHLER: Vorlage enthaelt keinen Export-Pfad — Abbruch."
+  exit 1
+fi
 if ! grep -q '</WebUI>' "${USER_XML}"; then
   echo "FEHLER: WebUI-Tag kaputt — Abbruch."
   exit 1
@@ -61,7 +65,7 @@ echo "==> 3/3 Fertig"
 echo
 echo "WICHTIG: Seite neu laden (F5), dann:"
 echo "  Docker -> Container hinzufuegen -> Template "foto-exif" (nicht alte Session)"
-echo "  Es muessen erscheinen: Name=foto-exif, Quelle=ghcr.io/..., Pfad Photos"
+echo "  Es muessen erscheinen: Name=foto-exif, Quelle=ghcr.io/..., Pfad Photos + Export"
 echo "  WebUI: http://UNRAID-IP:8791"
 echo
 echo "Falls Felder leer bleiben:"
