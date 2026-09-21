@@ -14,8 +14,27 @@ REPO="https://github.com/PaulG67/foto-exif.git"
 
 echo "==> 1/3 Unraid-Vorlage"
 mkdir -p "${TEMPLATE_DIR}"
-curl -fsSL "${RAW_BASE}/unraid/my-foto-exif.xml" -o "${USER_XML}"
+# Cache umgehen
+curl -fsSL -H "Cache-Control: no-cache" "${RAW_BASE}/unraid/my-foto-exif.xml?$(date +%s)" -o "${USER_XML}"
+
+# Validierung: ohne Repository/Photos ist die Vorlage fuer Unraid nutzlos
+if ! grep -q '<Repository>ghcr.io/paulg67/foto-exif:latest</Repository>' "${USER_XML}"; then
+  echo "FEHLER: Vorlage enthaelt kein Repository — Abbruch."
+  exit 1
+fi
+if ! grep -q 'Name="Photos"' "${USER_XML}"; then
+  echo "FEHLER: Vorlage enthaelt keinen Photos-Pfad — Abbruch."
+  exit 1
+fi
+if ! grep -q '</WebUI>' "${USER_XML}"; then
+  echo "FEHLER: WebUI-Tag kaputt — Abbruch."
+  exit 1
+fi
+
 echo "  ${USER_XML}"
+echo "  Name/Repository/Photos OK"
+wc -c "${USER_XML}" | awk '{print "  Groesse:" $1 " Bytes"}'
+grep -E 'Name="Photos"|<Repository>|<Name>' "${USER_XML}" | sed 's/^/  /'
 
 echo "==> 2/3 Docker-Image"
 if docker pull "${IMAGE}" 2>/dev/null; then
@@ -40,12 +59,11 @@ fi
 
 echo "==> 3/3 Fertig"
 echo
-echo "Neu installieren:"
-echo "  Docker → Container hinzufügen → Template «foto-exif»"
-echo "  Photos-Pfad auf deinen Foto-/Scan-Ordner setzen (rw) → Apply"
+echo "WICHTIG: Seite neu laden (F5), dann:"
+echo "  Docker -> Container hinzufuegen -> Template "foto-exif" (nicht alte Session)"
+echo "  Es muessen erscheinen: Name=foto-exif, Quelle=ghcr.io/..., Pfad Photos"
 echo "  WebUI: http://UNRAID-IP:8791"
 echo
-echo "Update:"
-echo "  bash <(curl -fsSL ${RAW_BASE}/unraid/install-template.sh)"
-echo "  danach Docker → foto-exif → Force Update"
-echo "  (neue Template-Felder: Edit → Apply)"
+echo "Falls Felder leer bleiben:"
+echo "  cat ${USER_XML} | head"
+echo "  und dieses Script erneut ausfuehren."
