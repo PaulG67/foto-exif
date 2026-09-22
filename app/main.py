@@ -12,7 +12,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from PIL import Image
 
-from app.exif_utils import patch_exif_dates, read_exif_dates
+from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta
 
 JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
@@ -101,15 +101,16 @@ def create_app() -> Flask:
             if entry.is_dir():
                 dirs.append({"name": entry.name, "path": rel_of(entry, root_name)})
             elif entry.is_file() and entry.suffix.lower() in JPEG_EXTS:
-                dates = read_exif_dates(entry)
+                meta = read_exif_meta(entry)
                 files.append(
                     {
                         "name": entry.name,
                         "path": rel_of(entry, root_name),
                         "size": entry.stat().st_size,
-                        "original": dates.get("original"),
-                        "digitized": dates.get("digitized"),
-                        "modify": dates.get("modify"),
+                        "original": meta.get("original"),
+                        "digitized": meta.get("digitized"),
+                        "modify": meta.get("modify"),
+                        "tags": meta.get("tags") or [],
                     }
                 )
 
@@ -164,6 +165,7 @@ def create_app() -> Flask:
         date_str = data.get("date")
         time_str = data.get("time") or "12:00:00"
         opts = data.get("fields") or {}
+        tag_opts = data.get("tags") or {}
 
         if not paths:
             return jsonify({"ok": False, "error": "Keine Dateien"}), 400
@@ -176,7 +178,9 @@ def create_app() -> Flask:
         set_digitized = bool(opts.get("digitized", True))
         set_modify = bool(opts.get("modify", True))
         if not (set_original or set_digitized or set_modify):
-            return jsonify({"ok": False, "error": "Mindestens ein Feld waehlen"}), 400
+            return jsonify({"ok": False, "error": "Mindestens ein Datumsfeld waehlen"}), 400
+
+        tags = collect_tags(tag_opts)
 
         written = []
         errors = []
@@ -191,9 +195,11 @@ def create_app() -> Flask:
                     set_original=set_original,
                     set_digitized=set_digitized,
                     set_modify=set_modify,
+                    tags=tags,
+                    merge_tags=True,
                 )
-                dates = read_exif_dates(path)
-                written.append({"path": rel, **dates})
+                meta = read_exif_meta(path)
+                written.append({"path": rel, **meta})
             except Exception as exc:
                 errors.append({"path": rel, "error": str(exc)})
 
@@ -204,6 +210,7 @@ def create_app() -> Flask:
                 "files": written,
                 "errors": errors,
                 "date": exif_date,
+                "tags": tags,
             }
         )
 
@@ -225,13 +232,13 @@ def create_app() -> Flask:
                     raise ValueError("Keine JPEG-Datei")
                 dest = unique_dest(EXPORT_ROOT, src.name)
                 shutil.move(str(src), str(dest))
-                dates = read_exif_dates(dest)
+                meta = read_exif_meta(dest)
                 moved.append(
                     {
                         "from": rel,
                         "to": dest.name,
                         "path": dest.name,
-                        **dates,
+                        **meta,
                     }
                 )
             except Exception as exc:
@@ -247,6 +254,30 @@ def create_app() -> Flask:
         )
 
     return app
+
+
+def collect_tags(tag_opts: dict) -> list[str]:
+    tags: list[str] = []
+    if bool(tag_opts.get("fotoScan", True)):
+        tags.append(DEFAULT_SCAN_TAG)
+    extra = tag_opts.get("extra") or ""
+    if isinstance(extra, list):
+        tags.extend(str(t).strip() for t in extra if str(t).strip())
+    else:
+        for part in re.split(r"[,;]+", str(extra)):
+            part = part.strip()
+            if part:
+                tags.append(part)
+    # dedupe preserve order
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tags:
+        key = t.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out
 
 
 def to_exif(date_str: str | None, time_str: str | None) -> str | None:

@@ -149,6 +149,13 @@
         <label><input type="checkbox" id="fDigitized" checked /> Digitized</label>
         <label><input type="checkbox" id="fModify" checked /> Modify</label>
       </div>
+      <div class="checks photos-only">
+        <label><input type="checkbox" id="tagFotoScan" checked /> Tag: Foto-Scan</label>
+        <label for="tagExtra" style="display:grid;gap:.25rem">
+          Weitere Tags
+          <input type="text" id="tagExtra" placeholder="z.B. Familie, 1998" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;min-width:11rem" />
+        </label>
+      </div>
       <div class="spacer"></div>
       <button type="button" id="btnReload">Daten neu laden</button>
       <button type="button" id="btnAll">Alle</button>
@@ -339,7 +346,8 @@
           <div class="meta">
             <strong>${escapeHtml(f.name)}</strong>
             Original: ${escapeHtml(fmt(f.original))}<br/>
-            Digitized: ${escapeHtml(fmt(f.digitized))}
+            Digitized: ${escapeHtml(fmt(f.digitized))}<br/>
+            Tags: ${escapeHtml((f.tags || []).join(", ") || "—")}
           </div>
         </article>`;
       }).join("");
@@ -375,9 +383,10 @@
           <div><span>DateTimeOriginal</span><b>${escapeHtml(fmt(f.original))}</b></div>
           <div><span>Digitized</span><b>${escapeHtml(fmt(f.digitized))}</b></div>
           <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
+          <div><span>Tags</span><b>${escapeHtml((f.tags || []).join(", ") || "—")}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
-        <p class="hint">Immich nutzt vor allem <strong>DateTimeOriginal</strong>.</p>
+        <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong> und erkennt Tags aus Keywords/XMP (z.B. <strong>Foto-Scan</strong>).</p>
         ${state.root === "photos" ? `<button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
       `;
       $("btnUseExif")?.addEventListener("click", () => {
@@ -441,6 +450,10 @@
               digitized: $("fDigitized").checked,
               modify: $("fModify").checked,
             },
+            tags: {
+              fotoScan: $("tagFotoScan").checked,
+              extra: $("tagExtra").value || "",
+            },
           }),
         });
         data = await res.json();
@@ -454,7 +467,8 @@
       const errors = data.errors || [];
       let msg, kind;
       if (written > 0 && !errors.length) {
-        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}.`;
+        const tagTxt = (data.tags || []).length ? ` Tags: ${(data.tags || []).join(", ")}.` : "";
+        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}.${tagTxt}`;
         kind = "ok";
       } else if (written > 0) {
         msg = `${written} gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
