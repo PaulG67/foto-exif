@@ -151,6 +151,48 @@
       border: 1px solid #c9e2de; border-radius: 10px; padding: .7rem .8rem;
     }
     .photos-only.hidden { display: none !important; }
+    .adjust-panel {
+      margin-top: 1rem;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .adjust-panel h2 {
+      margin: 0; padding: .85rem 1rem; border-bottom: 1px solid var(--line);
+      font-family: var(--display); font-size: 1.1rem;
+    }
+    .adjust-body {
+      display: grid;
+      grid-template-columns: minmax(220px, 340px) 1fr;
+      gap: 1rem;
+      padding: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 800px) {
+      .adjust-body { grid-template-columns: 1fr; }
+    }
+    .adjust-preview-wrap {
+      background: #eef2f6; border-radius: 10px; min-height: 200px;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .adjust-preview-wrap img {
+      max-width: 100%; max-height: 320px; object-fit: contain; display: block;
+    }
+    .adjust-controls { display: grid; gap: .85rem; }
+    .slider-row { display: grid; gap: .35rem; }
+    .slider-row label {
+      display: flex; justify-content: space-between; gap: .75rem;
+      font-size: .85rem; font-weight: 600; color: var(--ink);
+    }
+    .slider-row label span { color: var(--muted); font-weight: 500; }
+    .slider-row input[type="range"] { width: 100%; }
+    .adjust-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .adjust-warn {
+      margin: 0; font-size: .82rem; color: var(--muted);
+      background: #fff8e8; border: 1px solid #f0d9a8; border-radius: 10px; padding: .7rem .8rem;
+    }
   </style>
 </head>
 <body>
@@ -255,6 +297,38 @@
         </div>
       </aside>
     </div>
+
+    <section class="adjust-panel photos-only" id="adjustPanel">
+      <h2>Bild anpassen</h2>
+      <div class="adjust-body">
+        <div class="adjust-preview-wrap">
+          <img id="adjustPreview" alt="Vorschau Anpassung" />
+        </div>
+        <div class="adjust-controls">
+          <p class="adjust-warn">
+            Eigener Bereich — getrennt von Datum/Tags. Änderungen schreiben die <strong>Bildpixel</strong>
+            neu (leichte JPEG-Kompression). Metadaten bleiben soweit möglich erhalten.
+          </p>
+          <p class="group-hint" id="adjustTarget">Kein Foto ausgewählt.</p>
+          <div class="slider-row">
+            <label>Helligkeit <span id="valBrightness">1.00</span></label>
+            <input type="range" id="adjBrightness" min="0.4" max="1.8" step="0.01" value="1" />
+          </div>
+          <div class="slider-row">
+            <label>Kontrast <span id="valContrast">1.00</span></label>
+            <input type="range" id="adjContrast" min="0.4" max="1.8" step="0.01" value="1" />
+          </div>
+          <div class="slider-row">
+            <label>Sättigung <span id="valSaturation">1.00</span></label>
+            <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
+          </div>
+          <div class="adjust-actions">
+            <button type="button" id="btnAdjReset">Zurücksetzen</button>
+            <button type="button" class="primary" id="btnAdjApply" disabled>Auf Datei anwenden</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script>
@@ -302,6 +376,79 @@
       const hasSel = state.selected.size > 0;
       $("btnSave").disabled = !hasSel || state.root !== "photos";
       $("btnMove").disabled = !hasSel || state.root !== "photos";
+      const canAdj =
+        state.root === "photos" &&
+        !!state.active &&
+        !adjustIsNeutral();
+      $("btnAdjApply").disabled = !canAdj;
+    }
+
+    let adjustTimer = null;
+
+    function adjustValues() {
+      return {
+        brightness: parseFloat($("adjBrightness").value) || 1,
+        contrast: parseFloat($("adjContrast").value) || 1,
+        saturation: parseFloat($("adjSaturation").value) || 1,
+      };
+    }
+
+    function adjustIsNeutral() {
+      const v = adjustValues();
+      return (
+        Math.abs(v.brightness - 1) < 0.005 &&
+        Math.abs(v.contrast - 1) < 0.005 &&
+        Math.abs(v.saturation - 1) < 0.005
+      );
+    }
+
+    function syncAdjustLabels() {
+      const v = adjustValues();
+      $("valBrightness").textContent = v.brightness.toFixed(2);
+      $("valContrast").textContent = v.contrast.toFixed(2);
+      $("valSaturation").textContent = v.saturation.toFixed(2);
+    }
+
+    function resetAdjustSliders() {
+      $("adjBrightness").value = "1";
+      $("adjContrast").value = "1";
+      $("adjSaturation").value = "1";
+      syncAdjustLabels();
+      updateAdjustPreview();
+      updateButtons();
+    }
+
+    function updateAdjustPanel() {
+      const f = fileByPath(state.active);
+      if (!f || state.root !== "photos") {
+        $("adjustTarget").textContent = "Kein Foto ausgewählt.";
+        $("adjustPreview").removeAttribute("src");
+        $("btnAdjApply").disabled = true;
+        return;
+      }
+      $("adjustTarget").textContent = `Aktiv: ${f.name}`;
+      updateAdjustPreview();
+      updateButtons();
+    }
+
+    function updateAdjustPreview() {
+      syncAdjustLabels();
+      const f = fileByPath(state.active);
+      if (!f || state.root !== "photos") return;
+      const v = adjustValues();
+      clearTimeout(adjustTimer);
+      adjustTimer = setTimeout(() => {
+        const q = new URLSearchParams({
+          root: state.root,
+          path: f.path,
+          brightness: String(v.brightness),
+          contrast: String(v.contrast),
+          saturation: String(v.saturation),
+          t: String(state.cacheBust),
+        });
+        $("adjustPreview").src = `/api/adjust-preview?${q.toString()}`;
+      }, 120);
+      updateButtons();
     }
 
     function fileByPath(path) {
@@ -371,6 +518,7 @@
       renderDirs(data.dirs || []);
       renderFiles();
       renderDetail();
+      updateAdjustPanel();
       updateButtons();
 
       if (statusMessage) setStatus(statusMessage, statusKind);
@@ -440,6 +588,7 @@
           state.active = p;
           renderFiles();
           renderDetail();
+          updateAdjustPanel();
           updateButtons();
           setStatus(`${state.selected.size} ausgewählt`);
         });
@@ -477,6 +626,7 @@
         if (!state.selected.has(path)) state.selected.add(path);
         renderFiles();
         renderDetail();
+        updateAdjustPanel();
         updateButtons();
       } catch (err) {
         setStatus(`Drehen fehlgeschlagen: ${err.message || err}`, "err");
@@ -539,6 +689,7 @@
       if (!state.active && state.files[0]) state.active = state.files[0].path;
       renderFiles();
       renderDetail();
+      updateAdjustPanel();
       updateButtons();
     });
     $("btnNone").addEventListener("click", () => {
@@ -546,6 +697,52 @@
       renderFiles();
       updateButtons();
     });
+
+    ["adjBrightness", "adjContrast", "adjSaturation"].forEach((id) => {
+      $(id).addEventListener("input", updateAdjustPreview);
+    });
+    $("btnAdjReset").addEventListener("click", resetAdjustSliders);
+    $("btnAdjApply").addEventListener("click", async () => {
+      if (!state.active || state.root !== "photos") return;
+      const v = adjustValues();
+      if (adjustIsNeutral()) {
+        setStatus("Keine Anpassung nötig (alle Werte bei 1.00).", "err");
+        return;
+      }
+      const path = state.active;
+      $("btnAdjApply").disabled = true;
+      setStatus(`Passe Bild an: ${path}…`);
+      try {
+        const res = await fetch("/api/adjust", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ root: "photos", path, ...v }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          setStatus(`Anpassen fehlgeschlagen: ${data.error || "Fehler"}`, "err");
+          updateButtons();
+          return;
+        }
+        resetAdjustSliders();
+        await load(state.path, {
+          preserveSelection: true,
+          bustCache: true,
+          statusMessage: `Bild angepasst (Helligkeit/Kontrast/Sättigung) und gespeichert. JPEG neu kodiert.`,
+          statusKind: "ok",
+        });
+        state.active = path;
+        if (!state.selected.has(path)) state.selected.add(path);
+        renderFiles();
+        renderDetail();
+        updateAdjustPanel();
+        updateButtons();
+      } catch (err) {
+        setStatus(`Anpassen fehlgeschlagen: ${err.message || err}`, "err");
+        updateButtons();
+      }
+    });
+    syncAdjustLabels();
 
     function updateRenamePreview() {
       const prefix = $("renamePrefix").value || "scan_";
@@ -643,6 +840,7 @@
         state.active = [...state.selected][0] || state.active;
         renderFiles();
         renderDetail();
+        updateAdjustPanel();
         updateButtons();
       }
     });

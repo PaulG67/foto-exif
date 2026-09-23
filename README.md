@@ -34,8 +34,9 @@ Wenn das Template neue Felder hat: zusätzlich **Edit → Apply**.
 
 1. In der WebUI Ordner öffnen
 2. JPEGs auswählen
-3. Aufnahmedatum / Uhrzeit setzen
-4. **In Dateien speichern**
+3. Aufnahmedatum / Uhrzeit / Tags / Beschreibung setzen (EXIF/XMP)
+4. Optional: im Bereich **Bild anpassen** Helligkeit, Kontrast und Sättigung (schreibt Pixel neu)
+5. **In Dateien speichern** bzw. Anpassungen anwenden
 
 In Immich anschließend Metadaten der betroffenen Assets neu einlesen.
 

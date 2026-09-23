@@ -13,6 +13,7 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 from PIL import Image
 
 from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta, rotate_jpeg
+from app.image_edit import apply_image_adjustments, render_adjusted_jpeg
 
 JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
@@ -157,6 +158,52 @@ def create_app() -> Flask:
         if not path.is_file():
             abort(404)
         return send_file(path)
+
+    @app.get("/api/adjust-preview")
+    def adjust_preview():
+        root_name = request.args.get("root", "photos")
+        path = safe_path(request.args.get("path", ""), root_name)
+        if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
+            abort(404)
+        try:
+            data = render_adjusted_jpeg(
+                path,
+                brightness=float(request.args.get("brightness", 1)),
+                contrast=float(request.args.get("contrast", 1)),
+                saturation=float(request.args.get("saturation", 1)),
+                quality=85,
+                max_side=900,
+            )
+            return send_file(BytesIO(data), mimetype="image/jpeg")
+        except Exception:
+            abort(500)
+
+    @app.post("/api/adjust")
+    def adjust():
+        data = request.get_json(force=True, silent=True) or {}
+        root_name = data.get("root") or "photos"
+        rel = data.get("path") or ""
+        try:
+            brightness = float(data.get("brightness", 1))
+            contrast = float(data.get("contrast", 1))
+            saturation = float(data.get("saturation", 1))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
+
+        try:
+            path = safe_path(rel, root_name)
+            if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
+                raise ValueError("Keine JPEG-Datei")
+            apply_image_adjustments(
+                path,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation,
+            )
+            meta = read_exif_meta(path)
+            return jsonify({"ok": True, "path": rel, **meta})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "path": rel}), 400
 
     @app.post("/api/apply")
     def apply_dates():
