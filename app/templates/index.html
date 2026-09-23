@@ -342,6 +342,7 @@
             neu (leichte JPEG-Kompression). Metadaten bleiben soweit möglich erhalten.
           </p>
           <p class="group-hint" id="adjustTarget">Kein Foto ausgewählt.</p>
+          <p class="group-hint" id="adjustSizeHint">Größe: —</p>
           <div class="slider-row">
             <label>Helligkeit <span id="valBrightness">1.00</span></label>
             <input type="range" id="adjBrightness" min="0.4" max="1.8" step="0.01" value="1" />
@@ -424,6 +425,8 @@
     }
 
     let adjustTimer = null;
+    let adjustSizeTimer = null;
+    let adjustSizeAbort = null;
     const zoomState = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0, path: null };
 
     function adjustValues() {
@@ -521,6 +524,7 @@
       const f = fileByPath(state.active);
       if (!f || state.root !== "photos") {
         $("adjustTarget").textContent = "Kein Foto ausgewählt.";
+        $("adjustSizeHint").textContent = "Größe: —";
         $("adjustPreview").removeAttribute("src");
         $("btnAdjApply").disabled = true;
         zoomState.path = null;
@@ -534,6 +538,60 @@
       $("adjustTarget").textContent = `Aktiv: ${f.name}`;
       updateAdjustPreview();
       updateButtons();
+    }
+
+    function setAdjustSizeHint(text) {
+      $("adjustSizeHint").textContent = text;
+    }
+
+    function updateAdjustSizeEstimate() {
+      const f = fileByPath(state.active);
+      if (!f || state.root !== "photos") {
+        setAdjustSizeHint("Größe: —");
+        return;
+      }
+      const v = adjustValues();
+      const current = Number(f.size) || 0;
+      if (adjustIsNeutral()) {
+        setAdjustSizeHint(`Aktuell: ${fmtSize(current)} (keine Neukodierung)`);
+        return;
+      }
+      clearTimeout(adjustSizeTimer);
+      setAdjustSizeHint(`Aktuell: ${fmtSize(current)} → schätze…`);
+      adjustSizeTimer = setTimeout(async () => {
+        if (adjustSizeAbort) adjustSizeAbort.abort();
+        adjustSizeAbort = new AbortController();
+        const q = new URLSearchParams({
+          root: state.root,
+          path: f.path,
+          brightness: String(v.brightness),
+          contrast: String(v.contrast),
+          saturation: String(v.saturation),
+        });
+        try {
+          const res = await fetch(`/api/adjust-size?${q.toString()}`, {
+            signal: adjustSizeAbort.signal,
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            setAdjustSizeHint(`Aktuell: ${fmtSize(current)} → Schätzung fehlgeschlagen`);
+            return;
+          }
+          const est = data.estimated_size;
+          const delta = est - current;
+          let deltaTxt = "";
+          if (Math.abs(delta) >= 512) {
+            const sign = delta > 0 ? "+" : "−";
+            deltaTxt = ` (${sign}${fmtSize(Math.abs(delta))})`;
+          }
+          setAdjustSizeHint(
+            `Aktuell: ${fmtSize(current)} → nach Anwenden ca. ${fmtSize(est)}${deltaTxt}`
+          );
+        } catch (err) {
+          if (err.name === "AbortError") return;
+          setAdjustSizeHint(`Aktuell: ${fmtSize(current)} → Schätzung fehlgeschlagen`);
+        }
+      }, 380);
     }
 
     function updateAdjustPreview() {
@@ -553,6 +611,7 @@
         });
         $("adjustPreview").src = `/api/adjust-preview?${q.toString()}`;
       }, 120);
+      updateAdjustSizeEstimate();
       updateButtons();
     }
 

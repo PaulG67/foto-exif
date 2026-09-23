@@ -13,7 +13,11 @@ from flask import Flask, abort, jsonify, render_template, request, send_file
 from PIL import Image
 
 from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta, rotate_jpeg
-from app.image_edit import apply_image_adjustments, render_adjusted_jpeg
+from app.image_edit import (
+    apply_image_adjustments,
+    estimate_adjusted_size,
+    render_adjusted_jpeg,
+)
 
 JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
@@ -177,6 +181,39 @@ def create_app() -> Flask:
             return send_file(BytesIO(data), mimetype="image/jpeg")
         except Exception:
             abort(500)
+
+    @app.get("/api/adjust-size")
+    def adjust_size():
+        root_name = request.args.get("root", "photos")
+        rel = request.args.get("path", "")
+        path = safe_path(rel, root_name)
+        if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
+            abort(404)
+        try:
+            brightness = float(request.args.get("brightness", 1))
+            contrast = float(request.args.get("contrast", 1))
+            saturation = float(request.args.get("saturation", 1))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
+        try:
+            current = path.stat().st_size
+            estimated = estimate_adjusted_size(
+                path,
+                brightness=brightness,
+                contrast=contrast,
+                saturation=saturation,
+            )
+            return jsonify(
+                {
+                    "ok": True,
+                    "path": rel,
+                    "current_size": current,
+                    "estimated_size": estimated,
+                    "delta": estimated - current,
+                }
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
 
     @app.post("/api/adjust")
     def adjust():
