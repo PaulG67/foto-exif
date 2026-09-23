@@ -235,6 +235,14 @@
     }
     .adjust-zoom-bar label span { color: var(--muted); font-weight: 500; min-width: 2.6rem; }
     .adjust-zoom-bar input[type="range"] { flex: 1; min-width: 80px; }
+    .adjust-nav {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .45rem;
+    }
+    .adjust-nav .adjust-nav-pos {
+      flex: 1; min-width: 4rem; text-align: center;
+      font-size: .82rem; color: var(--muted); font-weight: 500;
+    }
+    .adjust-nav button { padding: .5rem .75rem; }
     .adjust-zoom-hint { margin: 0; font-size: .78rem; color: var(--muted); }
     .adjust-controls { display: grid; gap: .85rem; }
     .slider-row { display: grid; gap: .35rem; }
@@ -366,6 +374,11 @@
             </div>
             <div class="adjust-overlay" id="adjustOverlay"></div>
           </div>
+          <div class="adjust-nav">
+            <button type="button" id="btnAdjPrev" title="Vorheriges Foto">← Vorheriges</button>
+            <span class="adjust-nav-pos" id="adjustNavPos">—</span>
+            <button type="button" id="btnAdjNext" title="Nächstes Foto">Nächstes →</button>
+          </div>
           <div class="adjust-zoom-bar">
             <label>Zoom <span id="valZoom">100%</span>
               <input type="range" id="adjZoom" min="1" max="6" step="0.05" value="1" />
@@ -474,6 +487,45 @@
         !adjustIsNeutral();
       $("btnAdjApply").disabled = !canAdj;
       $("btnPixelClear").disabled = !pixelateState.regions.length;
+      updateAdjustNav();
+    }
+
+    function activeFileIndex() {
+      if (!state.active || !state.files.length) return -1;
+      return state.files.findIndex((f) => f.path === state.active);
+    }
+
+    function updateAdjustNav() {
+      const idx = activeFileIndex();
+      const total = state.files.length;
+      const inPhotos = state.root === "photos";
+      $("btnAdjPrev").disabled = !inPhotos || idx <= 0;
+      $("btnAdjNext").disabled = !inPhotos || idx < 0 || idx >= total - 1;
+      if (!inPhotos || idx < 0 || !total) {
+        $("adjustNavPos").textContent = "—";
+      } else {
+        $("adjustNavPos").textContent = `${idx + 1} / ${total}`;
+      }
+    }
+
+    function selectAdjustFile(path) {
+      if (!path || state.root !== "photos") return;
+      state.active = path;
+      state.selected = new Set([path]);
+      renderFiles();
+      renderDetail();
+      updateAdjustPanel();
+      updateButtons();
+      setStatus(`Aktiv: ${fileByPath(path)?.name || path}`);
+      const card = document.querySelector(`.card[data-path="${CSS.escape(path)}"]`);
+      card?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+
+    function stepAdjustFile(delta) {
+      const idx = activeFileIndex();
+      if (idx < 0) return;
+      const next = state.files[idx + delta];
+      if (next) selectAdjustFile(next.path);
     }
 
     let adjustTimer = null;
@@ -868,6 +920,8 @@
         setZoomAt(next, rect.left + rect.width / 2, rect.top + rect.height / 2);
       });
       $("btnAdjZoomReset").addEventListener("click", resetZoomView);
+      $("btnAdjPrev").addEventListener("click", () => stepAdjustFile(-1));
+      $("btnAdjNext").addEventListener("click", () => stepAdjustFile(1));
       window.addEventListener("resize", renderPixelOverlay);
       applyZoomTransform();
     })();
