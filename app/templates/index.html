@@ -173,13 +173,34 @@
     @media (max-width: 800px) {
       .adjust-body { grid-template-columns: 1fr; }
     }
+    .adjust-preview-col { display: grid; gap: .55rem; }
     .adjust-preview-wrap {
-      background: #eef2f6; border-radius: 10px; min-height: 200px;
-      display: flex; align-items: center; justify-content: center; overflow: hidden;
+      position: relative;
+      background: #eef2f6; border-radius: 10px; height: 320px;
+      overflow: hidden; cursor: grab; touch-action: none; user-select: none;
     }
-    .adjust-preview-wrap img {
-      max-width: 100%; max-height: 320px; object-fit: contain; display: block;
+    .adjust-preview-wrap.is-panning { cursor: grabbing; }
+    .adjust-preview-wrap.is-zoomed { cursor: grab; }
+    .adjust-preview-stage {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      transform-origin: center center;
+      will-change: transform;
     }
+    .adjust-preview-stage img {
+      max-width: 100%; max-height: 100%; object-fit: contain;
+      display: block; pointer-events: none;
+    }
+    .adjust-zoom-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .6rem;
+    }
+    .adjust-zoom-bar label {
+      display: flex; align-items: center; gap: .45rem; flex: 1; min-width: 140px;
+      font-size: .82rem; font-weight: 600; color: var(--ink);
+    }
+    .adjust-zoom-bar label span { color: var(--muted); font-weight: 500; min-width: 2.6rem; }
+    .adjust-zoom-bar input[type="range"] { flex: 1; min-width: 80px; }
+    .adjust-zoom-hint { margin: 0; font-size: .78rem; color: var(--muted); }
     .adjust-controls { display: grid; gap: .85rem; }
     .slider-row { display: grid; gap: .35rem; }
     .slider-row label {
@@ -301,8 +322,19 @@
     <section class="adjust-panel photos-only" id="adjustPanel">
       <h2>Bild anpassen</h2>
       <div class="adjust-body">
-        <div class="adjust-preview-wrap">
-          <img id="adjustPreview" alt="Vorschau Anpassung" />
+        <div class="adjust-preview-col">
+          <div class="adjust-preview-wrap" id="adjustViewport" title="Mausrad: zoomen, ziehen: verschieben">
+            <div class="adjust-preview-stage" id="adjustStage">
+              <img id="adjustPreview" alt="Vorschau Anpassung" draggable="false" />
+            </div>
+          </div>
+          <div class="adjust-zoom-bar">
+            <label>Zoom <span id="valZoom">100%</span>
+              <input type="range" id="adjZoom" min="1" max="6" step="0.05" value="1" />
+            </label>
+            <button type="button" id="btnAdjZoomReset">Zoom 100%</button>
+          </div>
+          <p class="adjust-zoom-hint">Mausrad über der Vorschau zoomen, bei Zoom mit der Maus verschieben. Doppelklick setzt den Zoom zurück.</p>
         </div>
         <div class="adjust-controls">
           <p class="adjust-warn">
@@ -384,6 +416,7 @@
     }
 
     let adjustTimer = null;
+    const zoomState = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0, path: null };
 
     function adjustValues() {
       return {
@@ -407,6 +440,64 @@
       $("valBrightness").textContent = v.brightness.toFixed(2);
       $("valContrast").textContent = v.contrast.toFixed(2);
       $("valSaturation").textContent = v.saturation.toFixed(2);
+      $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
+      $("adjZoom").value = String(zoomState.scale);
+    }
+
+    function applyZoomTransform() {
+      const stage = $("adjustStage");
+      const vp = $("adjustViewport");
+      stage.style.transform = `translate(${zoomState.x}px, ${zoomState.y}px) scale(${zoomState.scale})`;
+      vp.classList.toggle("is-zoomed", zoomState.scale > 1.01);
+      $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
+      if (Math.abs(parseFloat($("adjZoom").value) - zoomState.scale) > 0.001) {
+        $("adjZoom").value = String(zoomState.scale);
+      }
+    }
+
+    function clampZoomPan() {
+      const vp = $("adjustViewport");
+      const w = vp.clientWidth;
+      const h = vp.clientHeight;
+      if (zoomState.scale <= 1.01) {
+        zoomState.scale = 1;
+        zoomState.x = 0;
+        zoomState.y = 0;
+        return;
+      }
+      const maxX = (w * (zoomState.scale - 1)) / 2 + w * 0.15;
+      const maxY = (h * (zoomState.scale - 1)) / 2 + h * 0.15;
+      zoomState.x = Math.max(-maxX, Math.min(maxX, zoomState.x));
+      zoomState.y = Math.max(-maxY, Math.min(maxY, zoomState.y));
+    }
+
+    function setZoomAt(nextScale, clientX, clientY) {
+      const vp = $("adjustViewport");
+      const rect = vp.getBoundingClientRect();
+      const cx = (clientX != null ? clientX - rect.left : rect.width / 2) - rect.width / 2;
+      const cy = (clientY != null ? clientY - rect.top : rect.height / 2) - rect.height / 2;
+      const prev = zoomState.scale;
+      const scale = Math.max(1, Math.min(6, nextScale));
+      if (scale <= 1.01) {
+        zoomState.scale = 1;
+        zoomState.x = 0;
+        zoomState.y = 0;
+      } else {
+        const worldX = (cx - zoomState.x) / prev;
+        const worldY = (cy - zoomState.y) / prev;
+        zoomState.scale = scale;
+        zoomState.x = cx - worldX * scale;
+        zoomState.y = cy - worldY * scale;
+        clampZoomPan();
+      }
+      applyZoomTransform();
+    }
+
+    function resetZoomView() {
+      zoomState.scale = 1;
+      zoomState.x = 0;
+      zoomState.y = 0;
+      applyZoomTransform();
     }
 
     function resetAdjustSliders() {
@@ -424,7 +515,13 @@
         $("adjustTarget").textContent = "Kein Foto ausgewählt.";
         $("adjustPreview").removeAttribute("src");
         $("btnAdjApply").disabled = true;
+        zoomState.path = null;
+        resetZoomView();
         return;
+      }
+      if (zoomState.path !== f.path) {
+        zoomState.path = f.path;
+        resetZoomView();
       }
       $("adjustTarget").textContent = `Aktiv: ${f.name}`;
       updateAdjustPreview();
@@ -450,6 +547,59 @@
       }, 120);
       updateButtons();
     }
+
+    (function initAdjustZoom() {
+      const vp = $("adjustViewport");
+      vp.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+          setZoomAt(zoomState.scale * factor, e.clientX, e.clientY);
+        },
+        { passive: false }
+      );
+      vp.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        if (zoomState.scale > 1.05) resetZoomView();
+        else setZoomAt(2.5, e.clientX, e.clientY);
+      });
+      vp.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        if (zoomState.scale <= 1.01) return;
+        zoomState.dragging = true;
+        zoomState.lastX = e.clientX;
+        zoomState.lastY = e.clientY;
+        vp.classList.add("is-panning");
+        vp.setPointerCapture(e.pointerId);
+      });
+      vp.addEventListener("pointermove", (e) => {
+        if (!zoomState.dragging) return;
+        zoomState.x += e.clientX - zoomState.lastX;
+        zoomState.y += e.clientY - zoomState.lastY;
+        zoomState.lastX = e.clientX;
+        zoomState.lastY = e.clientY;
+        clampZoomPan();
+        applyZoomTransform();
+      });
+      const endPan = (e) => {
+        if (!zoomState.dragging) return;
+        zoomState.dragging = false;
+        vp.classList.remove("is-panning");
+        try {
+          vp.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+      };
+      vp.addEventListener("pointerup", endPan);
+      vp.addEventListener("pointercancel", endPan);
+      $("adjZoom").addEventListener("input", () => {
+        const next = parseFloat($("adjZoom").value) || 1;
+        const rect = vp.getBoundingClientRect();
+        setZoomAt(next, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      });
+      $("btnAdjZoomReset").addEventListener("click", resetZoomView);
+      applyZoomTransform();
+    })();
 
     function fileByPath(path) {
       return state.files.find((f) => f.path === path) || null;

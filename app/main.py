@@ -171,8 +171,8 @@ def create_app() -> Flask:
                 brightness=float(request.args.get("brightness", 1)),
                 contrast=float(request.args.get("contrast", 1)),
                 saturation=float(request.args.get("saturation", 1)),
-                quality=85,
-                max_side=900,
+                quality=88,
+                max_side=1600,
             )
             return send_file(BytesIO(data), mimetype="image/jpeg")
         except Exception:
