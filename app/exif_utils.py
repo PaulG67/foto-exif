@@ -40,6 +40,13 @@ def read_exif_meta(path: Path) -> dict:
     def dec(value) -> Optional[str]:
         if value is None:
             return None
+        if isinstance(value, (list, tuple)):
+            try:
+                return bytes(int(x) & 0xFF for x in value).decode("utf-8", errors="replace").rstrip("\x00")
+            except Exception:
+                return None
+        if isinstance(value, bytearray):
+            value = bytes(value)
         if isinstance(value, bytes):
             if len(value) >= 2 and value[1] == 0:
                 try:
@@ -47,7 +54,15 @@ def read_exif_meta(path: Path) -> dict:
                 except Exception:
                     pass
             return value.decode("utf-8", errors="replace").rstrip("\x00")
-        return str(value)
+        text = str(value).rstrip("\x00")
+        # Guard: never show str(bytes-tuple) like "(70, 111, ...)"
+        if re.fullmatch(r"\([\d,\s]+\)", text):
+            try:
+                nums = [int(x.strip()) for x in text[1:-1].split(",") if x.strip() != ""]
+                return bytes(nums).decode("utf-8", errors="replace").rstrip("\x00")
+            except Exception:
+                return None
+        return text
 
     zeroth = exif.get("0th") or {}
     exif_ifd = exif.get("Exif") or {}
@@ -89,12 +104,29 @@ def _normalize_tags(tags: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
     for tag in tags:
+        tag = (tag or "").strip()
+        if not tag or _is_garbage_tag(tag):
+            continue
         key = tag.casefold()
         if key in seen:
             continue
         seen.add(key)
         out.append(tag)
     return out
+
+
+def _is_garbage_tag(tag: str) -> bool:
+    """Drop decode artifacts like '70' or '(70, 111, ...)'."""
+    t = tag.strip()
+    if re.fullmatch(r"\d+", t):
+        return True
+    if re.fullmatch(r"\(\d+\)", t):
+        return True
+    if re.fullmatch(r"\(?\d+", t) or re.fullmatch(r"\d+\)?", t):
+        return True
+    if re.fullmatch(r"\([\d,\s]+\)", t):
+        return True
+    return False
 
 
 def _encode_xp_keywords(tags: list[str]) -> bytes:
