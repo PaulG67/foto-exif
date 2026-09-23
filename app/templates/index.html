@@ -381,6 +381,14 @@
       return `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}`;
     }
 
+    function fmtSize(bytes) {
+      const n = Number(bytes);
+      if (!Number.isFinite(n) || n < 0) return "—";
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+      return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 2 : 1)} MB`;
+    }
+
     function toInputDate(exif) {
       const m = String(exif || "").match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})/);
       if (!m) return null;
@@ -721,6 +729,7 @@
             <strong>${escapeHtml(f.name)}</strong>
             Original: ${escapeHtml(fmt(f.original))}<br/>
             Digitized: ${escapeHtml(fmt(f.digitized))}<br/>
+            Größe: ${escapeHtml(fmtSize(f.size))}<br/>
             Tags: ${escapeHtml((f.tags || []).join(", ") || "—")}
           </div>
         </article>`;
@@ -794,6 +803,7 @@
         <img class="preview" src="${mediaUrl("preview", f.path)}" alt="" />
         <div class="kv">
           <div><span>Datei</span><b>${escapeHtml(f.name)}</b></div>
+          <div><span>Größe</span><b>${escapeHtml(fmtSize(f.size))}</b></div>
           <div><span>DateTimeOriginal</span><b>${escapeHtml(fmt(f.original))}</b></div>
           <div><span>Digitized</span><b>${escapeHtml(fmt(f.digitized))}</b></div>
           <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
