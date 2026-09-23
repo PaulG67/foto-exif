@@ -77,13 +77,17 @@ def read_exif_meta(path: Path) -> dict:
         desc = _read_xmp_description(raw)
     result["description"] = desc or None
 
-    tags: list[str] = []
-    xp = zeroth.get(piexif.ImageIFD.XPKeywords)
-    if xp:
-        text = dec(xp) or ""
-        tags.extend(_split_tags(text.replace(";", ",")))
-    tags.extend(_read_xmp_subjects(raw))
-    result["tags"] = _normalize_tags(tags)
+    # One source only — otherwise Immich/UI show the same tags twice (XPKeywords + XMP)
+    xmp_tags = _normalize_tags(_read_xmp_subjects(raw))
+    if xmp_tags:
+        result["tags"] = xmp_tags
+    else:
+        xp_tags: list[str] = []
+        xp = zeroth.get(piexif.ImageIFD.XPKeywords)
+        if xp:
+            text = dec(xp) or ""
+            xp_tags.extend(_split_tags(text.replace(";", ",")))
+        result["tags"] = _normalize_tags(xp_tags)
     return result
 
 
@@ -306,7 +310,8 @@ def patch_exif_dates(
     if tags is not None:
         existing = existing_meta.get("tags") or []
         final_tags = _normalize_tags((existing if merge_tags else []) + list(tags))
-        exif["0th"][piexif.ImageIFD.XPKeywords] = _encode_xp_keywords(final_tags)
+        # Nur XMP Subject schreiben — XPKeywords entfernen, sonst doppelte Tags in Immich
+        exif["0th"].pop(piexif.ImageIFD.XPKeywords, None)
 
     write_description = description is not None and description.strip() != ""
     desc_text = description.strip() if write_description else None
