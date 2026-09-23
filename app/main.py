@@ -287,6 +287,8 @@ def create_app() -> Flask:
             )
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc), "path": rel}), 400
+
+    @app.post("/api/move-to-export")
     def move_to_export():
         data = request.get_json(force=True, silent=True) or {}
         paths = data.get("paths") or []
