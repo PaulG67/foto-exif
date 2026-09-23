@@ -313,3 +313,103 @@ def patch_exif_dates(
 
     tmp.write_bytes(out)
     tmp.replace(path)
+
+
+def rotate_jpeg(path: Path, degrees: int) -> str:
+    """
+    Rotate JPEG permanently (pixel data). Prefer lossless jpegtran; fallback Pillow.
+    Resets EXIF Orientation to 1 so Immich/viewers show it correctly forever.
+    degrees: 90 (CW), 180, 270 (CW) / or -90 for CCW.
+    Returns method used: 'jpegtran' | 'pillow'
+    """
+    degrees = int(degrees) % 360
+    if degrees not in (90, 180, 270):
+        raise ValueError("Nur 90, 180 oder 270 Grad")
+
+    raw = path.read_bytes()
+    if raw[:2] != b"\xff\xd8":
+        raise ValueError("Kein JPEG")
+
+    tmp = path.with_name(path.name + ".rottmp")
+    method = "jpegtran"
+
+    if not _jpegtran_rotate(path, tmp, degrees):
+        method = "pillow"
+        _pillow_rotate(path, tmp, degrees)
+
+    # Normalize orientation + drop stale thumbnail
+    try:
+        data = tmp.read_bytes()
+        try:
+            exif = piexif.load(data)
+        except Exception:
+            exif = {"0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": None}
+        exif.setdefault("0th", {})
+        exif["0th"][piexif.ImageIFD.Orientation] = 1
+        exif["thumbnail"] = None
+        if "1st" in exif:
+            exif["1st"] = {}
+        exif_bytes = piexif.dump(exif)
+        try:
+            maybe = piexif.insert(exif_bytes, data)
+            if isinstance(maybe, (bytes, bytearray)):
+                fixed = bytes(maybe)
+            else:
+                piexif.insert(exif_bytes, str(tmp), str(tmp) + ".fix")
+                fixed = Path(str(tmp) + ".fix").read_bytes()
+                Path(str(tmp) + ".fix").unlink(missing_ok=True)
+        except (TypeError, ValueError):
+            out2 = path.with_name(path.name + ".rotfix")
+            piexif.insert(exif_bytes, str(tmp), str(out2))
+            fixed = out2.read_bytes()
+            out2.unlink(missing_ok=True)
+        tmp.write_bytes(fixed)
+    except Exception:
+        # Rotation already done; orientation fix is best-effort
+        pass
+
+    tmp.replace(path)
+    return method
+
+
+def _jpegtran_rotate(src: Path, dest: Path, degrees: int) -> bool:
+    import shutil
+    import subprocess
+
+    bin_path = shutil.which("jpegtran")
+    if not bin_path:
+        return False
+    try:
+        subprocess.run(
+            [
+                bin_path,
+                "-rotate",
+                str(degrees),
+                "-copy",
+                "all",
+                "-outfile",
+                str(dest),
+                str(src),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return dest.is_file() and dest.stat().st_size > 0
+    except Exception:
+        dest.unlink(missing_ok=True)
+        return False
+
+
+def _pillow_rotate(src: Path, dest: Path, degrees: int) -> None:
+    from PIL import Image
+
+    # Map CW degrees to PIL transpose
+    ops = {
+        90: Image.Transpose.ROTATE_270,  # PIL ROTATE_270 = 90° CW
+        180: Image.Transpose.ROTATE_180,
+        270: Image.Transpose.ROTATE_90,  # PIL ROTATE_90 = 90° CCW = 270° CW
+    }
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        im = im.transpose(ops[degrees])
+        im.save(dest, format="JPEG", quality=95, optimize=True)

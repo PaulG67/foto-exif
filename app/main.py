@@ -12,7 +12,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from PIL import Image
 
-from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta
+from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta, rotate_jpeg
 
 JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
@@ -254,7 +254,39 @@ def create_app() -> Flask:
             }
         )
 
-    @app.post("/api/move-to-export")
+    @app.post("/api/rotate")
+    def rotate():
+        data = request.get_json(force=True, silent=True) or {}
+        root_name = data.get("root") or "photos"
+        rel = data.get("path") or ""
+        try:
+            degrees = int(data.get("degrees") or 90)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Ungueltiger Winkel"}), 400
+
+        # allow -90 as CCW
+        if degrees == -90:
+            degrees = 270
+        if degrees not in (90, 180, 270):
+            return jsonify({"ok": False, "error": "Nur 90, 180 oder 270 Grad"}), 400
+
+        try:
+            path = safe_path(rel, root_name)
+            if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
+                raise ValueError("Keine JPEG-Datei")
+            method = rotate_jpeg(path, degrees)
+            meta = read_exif_meta(path)
+            return jsonify(
+                {
+                    "ok": True,
+                    "path": rel,
+                    "degrees": degrees,
+                    "method": method,
+                    **meta,
+                }
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc), "path": rel}), 400
     def move_to_export():
         data = request.get_json(force=True, silent=True) or {}
         paths = data.get("paths") or []
