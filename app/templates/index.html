@@ -56,6 +56,28 @@
     }
     .checks { display: grid; gap: .3rem; }
     .checks label { display: flex; gap: .4rem; align-items: center; font-size: .92rem; }
+    .group {
+      display: grid; gap: .45rem;
+      padding: .55rem .7rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      min-width: 11rem;
+    }
+    .group-title {
+      font-size: .72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--muted); margin: 0;
+    }
+    .group-hint {
+      margin: 0; font-size: .78rem; color: var(--muted); line-height: 1.35;
+    }
+    .toolbar-sep {
+      width: 1px; align-self: stretch; background: var(--line); margin: 0 .15rem;
+    }
+    #tagExtra {
+      font: inherit; padding: .45rem .6rem; border: 1px solid var(--line);
+      border-radius: 8px; min-width: 12rem; width: 100%;
+    }
     button {
       font: inherit; font-weight: 600; border: none; border-radius: 10px;
       padding: .65rem 1rem; cursor: pointer; background: #fff; border: 1px solid var(--line);
@@ -144,17 +166,25 @@
         <label for="time">Uhrzeit</label>
         <input type="time" id="time" value="12:00" />
       </div>
-      <div class="checks photos-only">
-        <label><input type="checkbox" id="fOriginal" checked /> DateTimeOriginal</label>
-        <label><input type="checkbox" id="fDigitized" checked /> Digitized</label>
-        <label><input type="checkbox" id="fModify" checked /> Modify</label>
+      <div class="group photos-only">
+        <p class="group-title">EXIF-Datumsfelder</p>
+        <div class="checks">
+          <label><input type="checkbox" id="fOriginal" checked /> DateTimeOriginal</label>
+          <label><input type="checkbox" id="fDigitized" checked /> Digitized</label>
+          <label><input type="checkbox" id="fModify" checked /> Modify</label>
+        </div>
       </div>
-      <div class="checks photos-only">
-        <label><input type="checkbox" id="tagFotoScan" checked /> Tag: Foto-Scan</label>
-        <label for="tagExtra" style="display:grid;gap:.25rem">
-          Weitere Tags
-          <input type="text" id="tagExtra" placeholder="z.B. Familie, 1998" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;min-width:11rem" />
+      <div class="toolbar-sep photos-only" aria-hidden="true"></div>
+      <div class="group photos-only">
+        <p class="group-title">Tags (in EXIF/XMP der Datei)</p>
+        <div class="checks">
+          <label><input type="checkbox" id="tagFotoScan" checked /> Foto-Scan</label>
+        </div>
+        <label for="tagExtra" class="field" style="gap:.3rem">
+          <span style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Weitere Tags</span>
+          <input type="text" id="tagExtra" placeholder="z.B. Familie, 1998, Urlaub" />
         </label>
+        <p class="group-hint">Mehrere Tags mit Komma trennen, z.B. <code>Familie, 1998</code>.</p>
       </div>
       <div class="spacer"></div>
       <button type="button" id="btnReload">Daten neu laden</button>
@@ -386,7 +416,7 @@
           <div><span>Tags</span><b>${escapeHtml((f.tags || []).join(", ") || "—")}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
-        <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong> und erkennt Tags aus Keywords/XMP (z.B. <strong>Foto-Scan</strong>).</p>
+        <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong>. Tags werden direkt in die JPEG-Datei geschrieben (EXIF XPKeywords + XMP Subject), keine Extra-Datei.</p>
         ${state.root === "photos" ? `<button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
       `;
       $("btnUseExif")?.addEventListener("click", () => {
