@@ -257,6 +257,23 @@
       margin: 0; font-size: .82rem; color: var(--muted);
       background: #fff8e8; border: 1px solid #f0d9a8; border-radius: 10px; padding: .7rem .8rem;
     }
+    .dropzone {
+      margin: 0 0 1rem;
+      border: 2px dashed var(--line);
+      border-radius: var(--radius);
+      background: #f3f7f9;
+      padding: 1rem 1.1rem;
+      display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem;
+      transition: border-color .15s, background .15s;
+    }
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: #e7f3f1;
+    }
+    .dropzone-copy { flex: 1; min-width: 14rem; }
+    .dropzone-copy strong { display: block; font-size: .95rem; margin-bottom: .15rem; }
+    .dropzone-copy span { font-size: .82rem; color: var(--muted); }
+    .dropzone input[type="file"] { display: none; }
   </style>
 </head>
 <body>
@@ -346,6 +363,15 @@
 
     <p class="status" id="status">Lade Ordner…</p>
     <nav class="crumbs" id="crumbs"></nav>
+
+    <div class="dropzone photos-only" id="dropzone">
+      <div class="dropzone-copy">
+        <strong>Fotos hierher ziehen</strong>
+        <span id="dropzoneHint">JPEG (PNG/WebP wird nach JPEG konvertiert) → speichert in den aktuellen Ordner unter <code>/photos</code>.</span>
+      </div>
+      <button type="button" id="btnUploadPick">Dateien wählen</button>
+      <input type="file" id="uploadInput" accept="image/jpeg,image/jpg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple />
+    </div>
 
     <div class="layout">
       <aside class="panel" id="dirsPanel">
@@ -946,7 +972,14 @@
           ? 'Fotos bearbeiten unter <code>/photos</code>'
           : 'Export-Ordner <code>/export</code> — fertige Dateien mit Vorschau';
       $("gridTitle").textContent = root === "photos" ? "Fotos" : "Export";
+      updateDropzoneHint();
       load("", { bustCache: true });
+    }
+
+    function updateDropzoneHint() {
+      const folder = state.path ? `/photos/${state.path}` : "/photos";
+      $("dropzoneHint").innerHTML =
+        `JPEG (PNG/WebP wird nach JPEG konvertiert) → speichert in <code>${escapeHtml(folder)}</code> zur Weiterverarbeitung.`;
     }
 
     async function load(path = state.path, opts = {}) {
@@ -996,6 +1029,7 @@
 
       if (statusMessage) setStatus(statusMessage, statusKind);
       else setStatus(`${state.files.length} JPEG(s) in ${state.root === "export" ? "Export" : "diesem Ordner"}.`);
+      updateDropzoneHint();
       return true;
     }
 
@@ -1438,6 +1472,176 @@
         statusKind: kind,
       });
     });
+
+    async function uploadFiles(fileList) {
+      if (state.root !== "photos") {
+        setStatus("Upload nur im Reiter «Fotos bearbeiten».", "err");
+        return;
+      }
+      const files = [...(fileList || [])].filter((f) => f && f.size > 0);
+      if (!files.length) {
+        setStatus("Keine Bilddateien erkannt.", "err");
+        return;
+      }
+
+      const form = new FormData();
+      form.append("path", state.path || "");
+      for (const f of files) form.append("files", f, f.name);
+
+      setStatus(`Lade ${files.length} Datei(en) nach /photos…`);
+      let data;
+      try {
+        const res = await fetch("/api/upload", { method: "POST", body: form });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok && !data.saved) {
+          setStatus(`Upload fehlgeschlagen: ${data.error || res.statusText}`, "err");
+          return;
+        }
+      } catch (err) {
+        setStatus(`Upload fehlgeschlagen: ${err.message || err}`, "err");
+        return;
+      }
+
+      const saved = data.saved || 0;
+      const errors = data.errors || [];
+      const converted = (data.files || []).filter((f) => f.converted).length;
+      let msg, kind;
+      if (saved > 0 && !errors.length) {
+        msg = `${saved} Datei(en) in /photos gespeichert` +
+          (converted ? ` (${converted} nach JPEG konvertiert)` : "") +
+          `.`;
+        kind = "ok";
+      } else if (saved > 0) {
+        msg = `${saved} gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
+        kind = "err";
+      } else {
+        msg = `Nichts gespeichert: ${data.error || errors[0]?.error || "?"}`;
+        kind = "err";
+      }
+
+      const newPaths = (data.files || []).map((f) => f.path).filter(Boolean);
+      await load(state.path, {
+        preserveSelection: false,
+        bustCache: true,
+        statusMessage: msg,
+        statusKind: kind,
+      });
+      if (newPaths.length) {
+        state.selected = new Set(newPaths.filter((p) => state.files.some((f) => f.path === p)));
+        state.active = [...state.selected][0] || state.active;
+        renderFiles();
+        renderDetail();
+        updateAdjustPanel();
+        updateButtons();
+      }
+    }
+
+    function collectDroppedFiles(dataTransfer) {
+      return new Promise((resolve) => {
+        const items = dataTransfer?.items;
+        if (!items || !items.length) {
+          resolve([...(dataTransfer?.files || [])]);
+          return;
+        }
+
+        const entries = [];
+        for (const item of items) {
+          const entry = item.webkitGetAsEntry?.() || item.getAsEntry?.();
+          if (entry) entries.push(entry);
+        }
+        if (!entries.length) {
+          resolve([...(dataTransfer.files || [])]);
+          return;
+        }
+
+        const files = [];
+        let pending = 0;
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          if (pending > 0) return;
+          done = true;
+          resolve(files);
+        };
+        const readEntry = (entry) => {
+          if (entry.isFile) {
+            pending++;
+            entry.file(
+              (file) => {
+                files.push(file);
+                pending--;
+                finish();
+              },
+              () => {
+                pending--;
+                finish();
+              }
+            );
+          } else if (entry.isDirectory) {
+            pending++;
+            const reader = entry.createReader();
+            const readBatch = () => {
+              reader.readEntries(
+                (batch) => {
+                  if (!batch.length) {
+                    pending--;
+                    finish();
+                    return;
+                  }
+                  batch.forEach(readEntry);
+                  readBatch();
+                },
+                () => {
+                  pending--;
+                  finish();
+                }
+              );
+            };
+            readBatch();
+          }
+        };
+        entries.forEach(readEntry);
+        finish();
+      });
+    }
+
+    (function initUpload() {
+      const zone = $("dropzone");
+      const input = $("uploadInput");
+      $("btnUploadPick").addEventListener("click", () => input.click());
+      input.addEventListener("change", () => {
+        if (input.files?.length) uploadFiles(input.files);
+        input.value = "";
+      });
+
+      const onDragOver = (e) => {
+        if (state.root !== "photos") return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        zone.classList.add("dragover");
+      };
+      zone.addEventListener("dragenter", onDragOver);
+      zone.addEventListener("dragover", onDragOver);
+      zone.addEventListener("dragleave", (e) => {
+        if (!zone.contains(e.relatedTarget)) zone.classList.remove("dragover");
+      });
+      zone.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        zone.classList.remove("dragover");
+        if (state.root !== "photos") return;
+        const files = await collectDroppedFiles(e.dataTransfer);
+        uploadFiles(files);
+      });
+
+      // Prevent browser from opening dropped files outside the zone while on photos tab
+      ["dragover", "drop"].forEach((ev) => {
+        document.addEventListener(ev, (e) => {
+          if (state.root !== "photos") return;
+          if (zone.contains(e.target)) return;
+          e.preventDefault();
+        });
+      });
+    })();
 
     setTab("photos");
   </script>

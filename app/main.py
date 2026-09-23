@@ -10,7 +10,7 @@ from io import BytesIO
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta, rotate_jpeg
 from app.image_edit import (
@@ -24,6 +24,7 @@ JPEG_EXTS = {".jpg", ".jpeg"}
 PHOTOS_ROOT = Path(os.environ.get("PHOTOS_ROOT", "/photos")).resolve()
 EXPORT_ROOT = Path(os.environ.get("EXPORT_ROOT", "/export")).resolve()
 PORT = int(os.environ.get("PORT", "8791"))
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(250 * 1024 * 1024)))
 
 ROOTS = {
     "photos": PHOTOS_ROOT,
@@ -31,8 +32,23 @@ ROOTS = {
 }
 
 
+def unique_dest(dest_dir: Path, name: str) -> Path:
+    dest = dest_dir / name
+    if not dest.exists():
+        return dest
+    stem = Path(name).stem
+    suffix = Path(name).suffix
+    n = 1
+    while True:
+        candidate = dest_dir / f"{stem}_{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
     EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
 
     def root_of(name: str | None) -> Path:
@@ -56,19 +72,6 @@ def create_app() -> Flask:
     def rel_of(path: Path, root_name: str = "photos") -> str:
         root = root_of(root_name)
         return path.resolve().relative_to(root).as_posix()
-
-    def unique_dest(dest_dir: Path, name: str) -> Path:
-        dest = dest_dir / name
-        if not dest.exists():
-            return dest
-        stem = Path(name).stem
-        suffix = Path(name).suffix
-        n = 1
-        while True:
-            candidate = dest_dir / f"{stem}_{n}{suffix}"
-            if not candidate.exists():
-                return candidate
-            n += 1
 
     @app.get("/health")
     def health():
@@ -462,7 +465,84 @@ def create_app() -> Flask:
             }
         )
 
+    @app.post("/api/upload")
+    def upload():
+        """Save dropped/selected images into the current /photos folder."""
+        rel = (request.form.get("path") or "").strip()
+        try:
+            folder = safe_path(rel, "photos")
+        except Exception:
+            return jsonify({"ok": False, "error": "Ungueltiger Ordner"}), 400
+        if not folder.exists() or not folder.is_dir():
+            return jsonify({"ok": False, "error": "Ordner nicht gefunden"}), 404
+
+        uploads = request.files.getlist("files")
+        if not uploads:
+            return jsonify({"ok": False, "error": "Keine Dateien"}), 400
+
+        saved = []
+        errors = []
+        for storage in uploads:
+            try:
+                if not storage or not storage.filename:
+                    continue
+                dest, converted = save_upload_file(storage, folder)
+                meta = read_exif_meta(dest)
+                saved.append(
+                    {
+                        "path": rel_of(dest, "photos"),
+                        "name": dest.name,
+                        "size": dest.stat().st_size,
+                        "converted": converted,
+                        **meta,
+                    }
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "name": getattr(storage, "filename", "?"),
+                        "error": str(exc),
+                    }
+                )
+
+        return jsonify(
+            {
+                "ok": len(errors) == 0 and len(saved) > 0,
+                "saved": len(saved),
+                "files": saved,
+                "errors": errors,
+                "path": rel,
+            }
+        )
+
     return app
+
+
+def save_upload_file(storage, folder: Path) -> tuple[Path, bool]:
+    """Write an uploaded image into folder. Returns (path, was_converted)."""
+    raw = storage.read()
+    if not raw:
+        raise ValueError("Leere Datei")
+
+    original_name = sanitize_basename(Path(storage.filename or "foto.jpg").name)
+    stem = Path(original_name).stem or "foto"
+    suffix = Path(original_name).suffix.lower()
+
+    if raw[:2] == b"\xff\xd8":
+        name = f"{stem}{suffix if suffix in JPEG_EXTS else '.jpg'}"
+        dest = unique_dest(folder, name)
+        dest.write_bytes(raw)
+        return dest, False
+
+    try:
+        with Image.open(BytesIO(raw)) as im:
+            im = ImageOps.exif_transpose(im)
+            im = im.convert("RGB")
+            dest = unique_dest(folder, f"{stem}.jpg")
+            im.save(dest, format="JPEG", quality=92, optimize=True)
+            return dest, True
+    except Exception as exc:
+        raise ValueError(f"Kein unterstuetztes Bild ({exc})") from exc
 
 
 def sanitize_basename(name: str) -> str:
