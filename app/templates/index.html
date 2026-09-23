@@ -189,6 +189,7 @@
     }
     .adjust-preview-wrap.is-panning { cursor: grabbing; }
     .adjust-preview-wrap.is-zoomed { cursor: grab; }
+    .adjust-preview-wrap.is-selecting { cursor: crosshair; }
     .adjust-preview-stage {
       width: 100%; height: 100%;
       display: flex; align-items: center; justify-content: center;
@@ -198,6 +199,32 @@
     .adjust-preview-stage img {
       max-width: 100%; max-height: 100%; object-fit: contain;
       display: block; pointer-events: none;
+    }
+    .adjust-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    }
+    .adjust-region {
+      position: absolute;
+      border: 2px solid #e24b4a;
+      background: rgba(226, 75, 74, .12);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5);
+      pointer-events: none;
+    }
+    .adjust-region.is-draft {
+      border-style: dashed;
+      background: rgba(226, 75, 74, .18);
+    }
+    .adjust-pixel-box {
+      display: grid; gap: .55rem;
+      padding: .7rem .8rem;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+    .adjust-pixel-box .group-title { margin: 0; }
+    .adjust-pixel-actions { display: flex; flex-wrap: wrap; gap: .45rem; }
+    .adjust-pixel-actions button.active {
+      background: var(--accent); color: #fff; border-color: transparent;
     }
     .adjust-zoom-bar {
       display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .6rem;
@@ -333,10 +360,11 @@
       <h2>Bild anpassen</h2>
       <div class="adjust-body">
         <div class="adjust-preview-col">
-          <div class="adjust-preview-wrap" id="adjustViewport" title="Mausrad: zoomen, ziehen: verschieben">
+          <div class="adjust-preview-wrap" id="adjustViewport" title="Mausrad: zoomen; bei Zoom ziehen = verschieben">
             <div class="adjust-preview-stage" id="adjustStage">
               <img id="adjustPreview" alt="Vorschau Anpassung" draggable="false" />
             </div>
+            <div class="adjust-overlay" id="adjustOverlay"></div>
           </div>
           <div class="adjust-zoom-bar">
             <label>Zoom <span id="valZoom">100%</span>
@@ -344,7 +372,7 @@
             </label>
             <button type="button" id="btnAdjZoomReset">Zoom 100%</button>
           </div>
-          <p class="adjust-zoom-hint">Mausrad über der Vorschau zoomen, bei Zoom mit der Maus verschieben. Doppelklick setzt den Zoom zurück.</p>
+          <p class="adjust-zoom-hint" id="adjustModeHint">Mausrad zoomen. Für Verpixelung: «Bereich markieren», Rechteck aufziehen.</p>
         </div>
         <div class="adjust-controls">
           <p class="adjust-warn">
@@ -364,6 +392,18 @@
           <div class="slider-row">
             <label>Sättigung <span id="valSaturation">1.00</span></label>
             <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
+          </div>
+          <div class="adjust-pixel-box">
+            <p class="group-title">Bereich verpixeln</p>
+            <p class="group-hint" id="pixelRegionHint">Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.</p>
+            <div class="slider-row">
+              <label>Pixelstärke <span id="valPixel">mittel</span></label>
+              <input type="range" id="adjPixel" min="0.02" max="0.12" step="0.005" value="0.045" />
+            </div>
+            <div class="adjust-pixel-actions">
+              <button type="button" id="btnPixelMode">Bereich markieren</button>
+              <button type="button" id="btnPixelClear" disabled>Bereiche löschen</button>
+            </div>
           </div>
           <div class="adjust-actions">
             <button type="button" id="btnAdjReset">Zurücksetzen</button>
@@ -433,18 +473,29 @@
         !!state.active &&
         !adjustIsNeutral();
       $("btnAdjApply").disabled = !canAdj;
+      $("btnPixelClear").disabled = !pixelateState.regions.length;
     }
 
     let adjustTimer = null;
     let adjustSizeTimer = null;
     let adjustSizeAbort = null;
     const zoomState = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0, path: null };
+    const pixelateState = {
+      mode: false,
+      regions: [],
+      draft: null,
+      drawing: false,
+      startX: 0,
+      startY: 0,
+    };
 
     function adjustValues() {
       return {
         brightness: parseFloat($("adjBrightness").value) || 1,
         contrast: parseFloat($("adjContrast").value) || 1,
         saturation: parseFloat($("adjSaturation").value) || 1,
+        pixel_strength: parseFloat($("adjPixel").value) || 0.045,
+        regions: pixelateState.regions.map((r) => ({ ...r })),
       };
     }
 
@@ -453,8 +504,22 @@
       return (
         Math.abs(v.brightness - 1) < 0.005 &&
         Math.abs(v.contrast - 1) < 0.005 &&
-        Math.abs(v.saturation - 1) < 0.005
+        Math.abs(v.saturation - 1) < 0.005 &&
+        !v.regions.length
       );
+    }
+
+    function pixelStrengthLabel(s) {
+      if (s < 0.035) return "fein";
+      if (s < 0.06) return "mittel";
+      if (s < 0.09) return "grob";
+      return "sehr grob";
+    }
+
+    function encodeRegionsParam(regions) {
+      return regions
+        .map((r) => `${r.x.toFixed(5)},${r.y.toFixed(5)},${r.w.toFixed(5)},${r.h.toFixed(5)}`)
+        .join(";");
     }
 
     function syncAdjustLabels() {
@@ -462,8 +527,34 @@
       $("valBrightness").textContent = v.brightness.toFixed(2);
       $("valContrast").textContent = v.contrast.toFixed(2);
       $("valSaturation").textContent = v.saturation.toFixed(2);
+      $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
+      const n = pixelateState.regions.length;
+      $("pixelRegionHint").textContent = n
+        ? `${n} Bereich(e) markiert — Vorschau zeigt die Verpixelung.`
+        : "Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.";
+    }
+
+    function setPixelateMode(on) {
+      pixelateState.mode = !!on;
+      $("btnPixelMode").classList.toggle("active", pixelateState.mode);
+      $("btnPixelMode").textContent = pixelateState.mode ? "Markieren aktiv" : "Bereich markieren";
+      $("adjustViewport").classList.toggle("is-selecting", pixelateState.mode);
+      $("adjustModeHint").textContent = pixelateState.mode
+        ? "Markieren aktiv: Rechteck aufziehen. Nochmal klicken zum Beenden. Zoom weiter per Mausrad."
+        : "Mausrad zoomen. Für Verpixelung: «Bereich markieren», Rechteck aufziehen.";
+    }
+
+    function clearPixelRegions({ refresh = true } = {}) {
+      pixelateState.regions = [];
+      pixelateState.draft = null;
+      pixelateState.drawing = false;
+      renderPixelOverlay();
+      if (refresh) {
+        updateAdjustPreview();
+        updateButtons();
+      }
     }
 
     function applyZoomTransform() {
@@ -475,6 +566,7 @@
       if (Math.abs(parseFloat($("adjZoom").value) - zoomState.scale) > 0.001) {
         $("adjZoom").value = String(zoomState.scale);
       }
+      renderPixelOverlay();
     }
 
     function clampZoomPan() {
@@ -522,10 +614,60 @@
       applyZoomTransform();
     }
 
+    function clientToNorm(clientX, clientY) {
+      const img = $("adjustPreview");
+      const r = img.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      const x = (clientX - r.left) / r.width;
+      const y = (clientY - r.top) / r.height;
+      if (x < -0.02 || y < -0.02 || x > 1.02 || y > 1.02) return null;
+      return {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+      };
+    }
+
+    function normRectFromPoints(a, b) {
+      const x = Math.min(a.x, b.x);
+      const y = Math.min(a.y, b.y);
+      const w = Math.abs(a.x - b.x);
+      const h = Math.abs(a.y - b.y);
+      return { x, y, w, h };
+    }
+
+    function renderPixelOverlay() {
+      const overlay = $("adjustOverlay");
+      const vp = $("adjustViewport");
+      const img = $("adjustPreview");
+      const vpRect = vp.getBoundingClientRect();
+      const imgRect = img.getBoundingClientRect();
+      overlay.innerHTML = "";
+      if (!img.getAttribute("src") || !imgRect.width) return;
+
+      const left = imgRect.left - vpRect.left;
+      const top = imgRect.top - vpRect.top;
+      const all = [...pixelateState.regions];
+      if (pixelateState.draft) all.push({ ...pixelateState.draft, _draft: true });
+
+      for (const r of all) {
+        if (r.w < 0.002 || r.h < 0.002) continue;
+        const el = document.createElement("div");
+        el.className = "adjust-region" + (r._draft ? " is-draft" : "");
+        el.style.left = `${left + r.x * imgRect.width}px`;
+        el.style.top = `${top + r.y * imgRect.height}px`;
+        el.style.width = `${r.w * imgRect.width}px`;
+        el.style.height = `${r.h * imgRect.height}px`;
+        overlay.appendChild(el);
+      }
+    }
+
     function resetAdjustSliders() {
       $("adjBrightness").value = "1";
       $("adjContrast").value = "1";
       $("adjSaturation").value = "1";
+      $("adjPixel").value = "0.045";
+      setPixelateMode(false);
+      clearPixelRegions({ refresh: false });
       syncAdjustLabels();
       updateAdjustPreview();
       updateButtons();
@@ -539,11 +681,16 @@
         $("adjustPreview").removeAttribute("src");
         $("btnAdjApply").disabled = true;
         zoomState.path = null;
+        setPixelateMode(false);
+        clearPixelRegions({ refresh: false });
         resetZoomView();
+        renderPixelOverlay();
         return;
       }
       if (zoomState.path !== f.path) {
         zoomState.path = f.path;
+        setPixelateMode(false);
+        clearPixelRegions({ refresh: false });
         resetZoomView();
       }
       $("adjustTarget").textContent = `Aktiv: ${f.name}`;
@@ -578,7 +725,9 @@
           brightness: String(v.brightness),
           contrast: String(v.contrast),
           saturation: String(v.saturation),
+          pixel_strength: String(v.pixel_strength),
         });
+        if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
         try {
           const res = await fetch(`/api/adjust-size?${q.toString()}`, {
             signal: adjustSizeAbort.signal,
@@ -618,10 +767,15 @@
           brightness: String(v.brightness),
           contrast: String(v.contrast),
           saturation: String(v.saturation),
+          pixel_strength: String(v.pixel_strength),
           t: String(state.cacheBust),
         });
-        $("adjustPreview").src = `/api/adjust-preview?${q.toString()}`;
+        if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
+        const img = $("adjustPreview");
+        img.onload = () => renderPixelOverlay();
+        img.src = `/api/adjust-preview?${q.toString()}`;
       }, 120);
+      renderPixelOverlay();
       updateAdjustSizeEstimate();
       updateButtons();
     }
@@ -638,12 +792,24 @@
         { passive: false }
       );
       vp.addEventListener("dblclick", (e) => {
+        if (pixelateState.mode) return;
         e.preventDefault();
         if (zoomState.scale > 1.05) resetZoomView();
         else setZoomAt(2.5, e.clientX, e.clientY);
       });
       vp.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
+        if (pixelateState.mode) {
+          const p = clientToNorm(e.clientX, e.clientY);
+          if (!p) return;
+          pixelateState.drawing = true;
+          pixelateState.startX = p.x;
+          pixelateState.startY = p.y;
+          pixelateState.draft = { x: p.x, y: p.y, w: 0, h: 0 };
+          vp.setPointerCapture(e.pointerId);
+          renderPixelOverlay();
+          return;
+        }
         if (zoomState.scale <= 1.01) return;
         zoomState.dragging = true;
         zoomState.lastX = e.clientX;
@@ -652,6 +818,16 @@
         vp.setPointerCapture(e.pointerId);
       });
       vp.addEventListener("pointermove", (e) => {
+        if (pixelateState.drawing) {
+          const p = clientToNorm(e.clientX, e.clientY);
+          if (!p) return;
+          pixelateState.draft = normRectFromPoints(
+            { x: pixelateState.startX, y: pixelateState.startY },
+            p
+          );
+          renderPixelOverlay();
+          return;
+        }
         if (!zoomState.dragging) return;
         zoomState.x += e.clientX - zoomState.lastX;
         zoomState.y += e.clientY - zoomState.lastY;
@@ -660,7 +836,23 @@
         clampZoomPan();
         applyZoomTransform();
       });
-      const endPan = (e) => {
+      const endPointer = (e) => {
+        if (pixelateState.drawing) {
+          pixelateState.drawing = false;
+          const draft = pixelateState.draft;
+          pixelateState.draft = null;
+          try {
+            vp.releasePointerCapture(e.pointerId);
+          } catch (_) {}
+          if (draft && draft.w >= 0.01 && draft.h >= 0.01) {
+            pixelateState.regions.push(draft);
+            updateAdjustPreview();
+          } else {
+            renderPixelOverlay();
+            updateButtons();
+          }
+          return;
+        }
         if (!zoomState.dragging) return;
         zoomState.dragging = false;
         vp.classList.remove("is-panning");
@@ -668,14 +860,15 @@
           vp.releasePointerCapture(e.pointerId);
         } catch (_) {}
       };
-      vp.addEventListener("pointerup", endPan);
-      vp.addEventListener("pointercancel", endPan);
+      vp.addEventListener("pointerup", endPointer);
+      vp.addEventListener("pointercancel", endPointer);
       $("adjZoom").addEventListener("input", () => {
         const next = parseFloat($("adjZoom").value) || 1;
         const rect = vp.getBoundingClientRect();
         setZoomAt(next, rect.left + rect.width / 2, rect.top + rect.height / 2);
       });
       $("btnAdjZoomReset").addEventListener("click", resetZoomView);
+      window.addEventListener("resize", renderPixelOverlay);
       applyZoomTransform();
     })();
 
@@ -928,15 +1121,17 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
+    $("btnPixelMode").addEventListener("click", () => setPixelateMode(!pixelateState.mode));
+    $("btnPixelClear").addEventListener("click", () => clearPixelRegions());
     $("btnAdjReset").addEventListener("click", resetAdjustSliders);
     $("btnAdjApply").addEventListener("click", async () => {
       if (!state.active || state.root !== "photos") return;
       const v = adjustValues();
       if (adjustIsNeutral()) {
-        setStatus("Keine Anpassung nötig (alle Werte bei 1.00).", "err");
+        setStatus("Keine Anpassung nötig (Werte bei 1.00, keine Bereiche).", "err");
         return;
       }
       const path = state.active;
@@ -946,7 +1141,15 @@
         const res = await fetch("/api/adjust", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ root: "photos", path, ...v }),
+          body: JSON.stringify({
+            root: "photos",
+            path,
+            brightness: v.brightness,
+            contrast: v.contrast,
+            saturation: v.saturation,
+            pixel_strength: v.pixel_strength,
+            regions: v.regions,
+          }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) {
@@ -954,11 +1157,20 @@
           updateButtons();
           return;
         }
+        const bits = [];
+        if (
+          Math.abs(v.brightness - 1) > 0.005 ||
+          Math.abs(v.contrast - 1) > 0.005 ||
+          Math.abs(v.saturation - 1) > 0.005
+        ) {
+          bits.push("Farbe");
+        }
+        if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
         resetAdjustSliders();
         await load(state.path, {
           preserveSelection: true,
           bustCache: true,
-          statusMessage: `Bild angepasst (Helligkeit/Kontrast/Sättigung) und gespeichert. JPEG neu kodiert.`,
+          statusMessage: `Bild angepasst (${bits.join(", ") || "OK"}) und gespeichert. JPEG neu kodiert.`,
           statusKind: "ok",
         });
         state.active = path;

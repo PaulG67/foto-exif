@@ -16,6 +16,7 @@ from app.exif_utils import DEFAULT_SCAN_TAG, patch_exif_dates, read_exif_meta, r
 from app.image_edit import (
     apply_image_adjustments,
     estimate_adjusted_size,
+    parse_regions,
     render_adjusted_jpeg,
 )
 
@@ -170,11 +171,14 @@ def create_app() -> Flask:
         if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
             abort(404)
         try:
+            regions = parse_regions(request.args.get("regions", ""))
             data = render_adjusted_jpeg(
                 path,
                 brightness=float(request.args.get("brightness", 1)),
                 contrast=float(request.args.get("contrast", 1)),
                 saturation=float(request.args.get("saturation", 1)),
+                regions=regions,
+                pixel_strength=float(request.args.get("pixel_strength", 0.045)),
                 quality=88,
                 max_side=1600,
             )
@@ -193,8 +197,10 @@ def create_app() -> Flask:
             brightness = float(request.args.get("brightness", 1))
             contrast = float(request.args.get("contrast", 1))
             saturation = float(request.args.get("saturation", 1))
+            pixel_strength = float(request.args.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
+        regions = parse_regions(request.args.get("regions", ""))
         try:
             current = path.stat().st_size
             estimated = estimate_adjusted_size(
@@ -202,6 +208,8 @@ def create_app() -> Flask:
                 brightness=brightness,
                 contrast=contrast,
                 saturation=saturation,
+                regions=regions,
+                pixel_strength=pixel_strength,
             )
             return jsonify(
                 {
@@ -210,6 +218,7 @@ def create_app() -> Flask:
                     "current_size": current,
                     "estimated_size": estimated,
                     "delta": estimated - current,
+                    "regions": len(regions),
                 }
             )
         except Exception as exc:
@@ -224,8 +233,10 @@ def create_app() -> Flask:
             brightness = float(data.get("brightness", 1))
             contrast = float(data.get("contrast", 1))
             saturation = float(data.get("saturation", 1))
+            pixel_strength = float(data.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
+        regions = parse_regions(data.get("regions"))
 
         try:
             path = safe_path(rel, root_name)
@@ -236,9 +247,18 @@ def create_app() -> Flask:
                 brightness=brightness,
                 contrast=contrast,
                 saturation=saturation,
+                regions=regions,
+                pixel_strength=pixel_strength,
             )
             meta = read_exif_meta(path)
-            return jsonify({"ok": True, "path": rel, **meta})
+            return jsonify(
+                {
+                    "ok": True,
+                    "path": rel,
+                    "regions": len(regions),
+                    **meta,
+                }
+            )
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc), "path": rel}), 400
 
