@@ -517,8 +517,6 @@
       updateAdjustPanel();
       updateButtons();
       setStatus(`Aktiv: ${fileByPath(path)?.name || path}`);
-      const card = document.querySelector(`.card[data-path="${CSS.escape(path)}"]`);
-      card?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
 
     function stepAdjustFile(delta) {
