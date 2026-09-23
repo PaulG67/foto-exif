@@ -411,6 +411,37 @@ def create_app() -> Flask:
             }
         )
 
+    @app.post("/api/delete")
+    def delete_files():
+        data = request.get_json(force=True, silent=True) or {}
+        root_name = data.get("root") or "photos"
+        paths = data.get("paths") or []
+        if not paths:
+            return jsonify({"ok": False, "error": "Keine Dateien"}), 400
+        if root_name not in ROOTS:
+            return jsonify({"ok": False, "error": "Ungueltiger Root"}), 400
+
+        deleted = []
+        errors = []
+        for rel in paths:
+            try:
+                path = safe_path(rel, root_name)
+                if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
+                    raise ValueError("Keine JPEG-Datei")
+                path.unlink()
+                deleted.append({"path": rel})
+            except Exception as exc:
+                errors.append({"path": rel, "error": str(exc)})
+
+        return jsonify(
+            {
+                "ok": len(errors) == 0,
+                "deleted": len(deleted),
+                "files": deleted,
+                "errors": errors,
+            }
+        )
+
     return app
 
 

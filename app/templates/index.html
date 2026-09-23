@@ -84,7 +84,15 @@
     }
     button.primary { background: var(--accent); color: #fff; border-color: transparent; }
     button.primary:hover { background: var(--accent-hover); }
+    button.danger {
+      background: #fff5f4; color: var(--danger); border-color: #f0b4ae;
+    }
+    button.danger:hover:not(:disabled) { background: #fde8e6; border-color: var(--danger); }
     button:disabled { opacity: .45; cursor: not-allowed; }
+    .delete-hint {
+      width: 100%; margin: .35rem 0 0; font-size: .78rem; color: var(--danger);
+      line-height: 1.35;
+    }
     .spacer { flex: 1; }
     .status { min-height: 1.3rem; color: var(--muted); margin: 0 0 1rem; }
     .status.ok { color: var(--ok); }
@@ -297,6 +305,8 @@
       <button type="button" id="btnNone">Keine</button>
       <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
       <button type="button" class="primary photos-only" id="btnMove" disabled>Nach Export verschieben</button>
+      <button type="button" class="danger" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
+      <p class="delete-hint" id="deleteHint">Löschen entfernt die ausgewählten JPEGs <strong>dauerhaft von der Festplatte</strong> — nicht wiederherstellbar.</p>
     </div>
 
     <p class="status" id="status">Lade Ordner…</p>
@@ -417,6 +427,7 @@
       const hasSel = state.selected.size > 0;
       $("btnSave").disabled = !hasSel || state.root !== "photos";
       $("btnMove").disabled = !hasSel || state.root !== "photos";
+      $("btnDelete").disabled = !hasSel;
       const canAdj =
         state.root === "photos" &&
         !!state.active &&
@@ -1096,6 +1107,63 @@
         kind = "err";
       } else {
         msg = `Nicht verschoben: ${data.error || errors[0]?.error || "?"}`;
+        kind = "err";
+      }
+
+      await load(state.path, {
+        preserveSelection: false,
+        bustCache: true,
+        statusMessage: msg,
+        statusKind: kind,
+      });
+    });
+
+    $("btnDelete").addEventListener("click", async () => {
+      const count = state.selected.size;
+      if (!count) return;
+      const where = state.root === "export" ? "/export" : "/photos";
+      const names = state.files
+        .filter((f) => state.selected.has(f.path))
+        .map((f) => f.name);
+      const preview =
+        names.length <= 5
+          ? names.join(", ")
+          : `${names.slice(0, 4).join(", ")} … (+${names.length - 4})`;
+      const ok = confirm(
+        `WARNUNG: ${count} Datei(en) dauerhaft von der Festplatte löschen?\n\n` +
+          `Ordner: ${where}\n` +
+          `${preview}\n\n` +
+          `Die Dateien werden unwiderruflich gelöscht (nicht in den Papierkorb). Fortfahren?`
+      );
+      if (!ok) return;
+
+      $("btnDelete").disabled = true;
+      setStatus(`Lösche ${count} Datei(en) von der Festplatte…`);
+      let data;
+      try {
+        const res = await fetch("/api/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ root: state.root, paths: [...state.selected] }),
+        });
+        data = await res.json();
+      } catch (err) {
+        setStatus(`Löschen fehlgeschlagen: ${err.message || err}`, "err");
+        updateButtons();
+        return;
+      }
+
+      const deleted = data.deleted || 0;
+      const errors = data.errors || [];
+      let msg, kind;
+      if (deleted > 0 && !errors.length) {
+        msg = `${deleted} Datei(en) von der Festplatte gelöscht.`;
+        kind = "ok";
+      } else if (deleted > 0) {
+        msg = `${deleted} gelöscht, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
+        kind = "err";
+      } else {
+        msg = `Nicht gelöscht: ${data.error || errors[0]?.error || "?"}`;
         kind = "err";
       }
 
