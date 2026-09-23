@@ -24,6 +24,7 @@ def read_exif_meta(path: Path) -> dict:
         "original": None,
         "digitized": None,
         "modify": None,
+        "description": None,
         "tags": [],
     }
     try:
@@ -40,7 +41,6 @@ def read_exif_meta(path: Path) -> dict:
         if value is None:
             return None
         if isinstance(value, bytes):
-            # XP* tags are UTF-16LE
             if len(value) >= 2 and value[1] == 0:
                 try:
                     return value.decode("utf-16le", errors="replace").rstrip("\x00")
@@ -55,12 +55,18 @@ def read_exif_meta(path: Path) -> dict:
     result["digitized"] = dec(exif_ifd.get(piexif.ExifIFD.DateTimeDigitized))
     result["modify"] = dec(zeroth.get(piexif.ImageIFD.DateTime))
 
+    desc = dec(zeroth.get(piexif.ImageIFD.ImageDescription))
+    if not desc:
+        desc = dec(zeroth.get(piexif.ImageIFD.XPComment))
+    if not desc:
+        desc = _read_xmp_description(raw)
+    result["description"] = desc or None
+
     tags: list[str] = []
     xp = zeroth.get(piexif.ImageIFD.XPKeywords)
     if xp:
         text = dec(xp) or ""
         tags.extend(_split_tags(text.replace(";", ",")))
-
     tags.extend(_read_xmp_subjects(raw))
     result["tags"] = _normalize_tags(tags)
     return result
@@ -95,6 +101,10 @@ def _encode_xp_keywords(tags: list[str]) -> bytes:
     return (";".join(tags) + "\x00").encode("utf-16le")
 
 
+def _encode_xp_string(text: str) -> bytes:
+    return (text + "\x00").encode("utf-16le")
+
+
 def _read_xmp_subjects(jpeg: bytes) -> list[str]:
     subjects: list[str] = []
     for match in re.finditer(
@@ -104,33 +114,59 @@ def _read_xmp_subjects(jpeg: bytes) -> list[str]:
     ):
         bag = match.group(1).decode("utf-8", errors="replace")
         subjects.extend(re.findall(r"<rdf:li[^>]*>(.*?)</rdf:li>", bag, flags=re.I | re.S))
-    # also rdf:li with parseType
-    for match in re.finditer(rb"<rdf:li[^>]*>([^<]+)</rdf:li>", jpeg, flags=re.I):
-        val = match.group(1).decode("utf-8", errors="replace").strip()
-        if val and val not in subjects:
-            # only keep if near subject context is hard; trust bag parse above primarily
-            pass
     return [s.strip() for s in subjects if s.strip()]
 
 
-def _build_xmp_packet(tags: list[str]) -> bytes:
-    items = "\n".join(f"     <rdf:li>{_xml_escape(t)}</rdf:li>" for t in tags)
+def _read_xmp_description(jpeg: bytes) -> Optional[str]:
+    match = re.search(
+        rb"<dc:description>\s*<rdf:Alt>\s*<rdf:li[^>]*>(.*?)</rdf:li>",
+        jpeg,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(
+            rb"<dc:description[^>]*>(.*?)</dc:description>",
+            jpeg,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+    if not match:
+        return None
+    text = match.group(1).decode("utf-8", errors="replace")
+    text = re.sub(r"<[^>]+>", "", text).strip()
+    return text or None
+
+
+def _build_xmp_packet(tags: list[str], description: str | None = None) -> bytes:
+    parts = []
+    if description:
+        parts.append(
+            "   <dc:description>\n"
+            "    <rdf:Alt>\n"
+            f'     <rdf:li xml:lang="x-default">{_xml_escape(description)}</rdf:li>\n'
+            "    </rdf:Alt>\n"
+            "   </dc:description>"
+        )
+    if tags:
+        items = "\n".join(f"     <rdf:li>{_xml_escape(t)}</rdf:li>" for t in tags)
+        parts.append(
+            "   <dc:subject>\n"
+            "    <rdf:Bag>\n"
+            f"{items}\n"
+            "    </rdf:Bag>\n"
+            "   </dc:subject>"
+        )
+    inner = "\n".join(parts)
     xml = f"""<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
   <rdf:Description rdf:about=""
     xmlns:dc="http://purl.org/dc/elements/1.1/">
-   <dc:subject>
-    <rdf:Bag>
-{items}
-    </rdf:Bag>
-   </dc:subject>
+{inner}
   </rdf:Description>
  </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>"""
     body = XMP_HEADER + xml.encode("utf-8")
-    # APP1: FF E1 + length(2) + payload ; length includes size bytes but not FFE1
     size = len(body) + 2
     if size > 0xFFFF:
         raise ValueError("XMP-Paket zu gross")
@@ -147,7 +183,6 @@ def _xml_escape(text: str) -> str:
 
 
 def _strip_xmp_segments(jpeg: bytes) -> bytes:
-    """Remove existing XMP APP1 segments; keep EXIF and image data."""
     if jpeg[:2] != b"\xff\xd8":
         return jpeg
     out = bytearray(jpeg[:2])
@@ -158,13 +193,12 @@ def _strip_xmp_segments(jpeg: bytes) -> bytes:
             out.extend(jpeg[i:])
             break
         marker = jpeg[i + 1]
-        if marker == 0xDA:  # SOS — rest is image
+        if marker == 0xDA:
             out.extend(jpeg[i:])
             break
-        if marker == 0xD9:  # EOI
+        if marker == 0xD9:
             out.extend(jpeg[i : i + 2])
             break
-        # markers without length
         if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0x01, 0x00):
             out.extend(jpeg[i : i + 2])
             i += 2
@@ -182,10 +216,11 @@ def _strip_xmp_segments(jpeg: bytes) -> bytes:
     return bytes(out)
 
 
-def _insert_xmp(jpeg: bytes, tags: list[str]) -> bytes:
+def _insert_xmp(jpeg: bytes, tags: list[str], description: str | None = None) -> bytes:
+    if not tags and not description:
+        return jpeg
     jpeg = _strip_xmp_segments(jpeg)
-    xmp = _build_xmp_packet(tags)
-    # insert XMP right after SOI
+    xmp = _build_xmp_packet(tags, description)
     return jpeg[:2] + xmp + jpeg[2:]
 
 
@@ -198,8 +233,9 @@ def patch_exif_dates(
     set_modify: bool = True,
     tags: list[str] | None = None,
     merge_tags: bool = True,
+    description: str | None = None,
 ) -> None:
-    """Write EXIF dates and/or keyword tags; JPEG image payload stays byte-identical."""
+    """Write EXIF dates/tags/description; JPEG image payload stays byte-identical."""
     raw = path.read_bytes()
     if raw[:2] != b"\xff\xd8":
         raise ValueError("Kein JPEG")
@@ -208,6 +244,8 @@ def patch_exif_dates(
     if before_sos is None:
         raise ValueError("Ungueltiges JPEG (kein SOS)")
     before_payload = raw[before_sos:]
+
+    existing_meta = read_exif_meta(path)
 
     try:
         exif = piexif.load(raw)
@@ -234,9 +272,19 @@ def patch_exif_dates(
 
     final_tags: list[str] | None = None
     if tags is not None:
-        existing = read_exif_meta(path).get("tags") or []
+        existing = existing_meta.get("tags") or []
         final_tags = _normalize_tags((existing if merge_tags else []) + list(tags))
         exif["0th"][piexif.ImageIFD.XPKeywords] = _encode_xp_keywords(final_tags)
+
+    write_description = description is not None and description.strip() != ""
+    desc_text = description.strip() if write_description else None
+    if write_description and desc_text is not None:
+        # ASCII-ish ImageDescription + Unicode XPComment for Immich/Windows
+        try:
+            exif["0th"][piexif.ImageIFD.ImageDescription] = desc_text.encode("utf-8")
+        except Exception:
+            exif["0th"][piexif.ImageIFD.ImageDescription] = desc_text.encode("latin-1", errors="replace")
+        exif["0th"][piexif.ImageIFD.XPComment] = _encode_xp_string(desc_text)
 
     exif_bytes = piexif.dump(exif)
     tmp = path.with_name(path.name + ".exiftmp")
@@ -252,8 +300,10 @@ def patch_exif_dates(
         piexif.insert(exif_bytes, str(path), str(tmp))
         out = tmp.read_bytes()
 
-    if final_tags is not None:
-        out = _insert_xmp(out, final_tags)
+    xmp_tags = final_tags if final_tags is not None else (existing_meta.get("tags") or [])
+    xmp_desc = desc_text if write_description else existing_meta.get("description")
+    if final_tags is not None or write_description:
+        out = _insert_xmp(out, xmp_tags or [], xmp_desc)
 
     after_sos = jpeg_scan_offset(out)
     if after_sos is None or out[after_sos:] != before_payload:

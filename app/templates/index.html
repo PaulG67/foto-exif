@@ -186,6 +186,37 @@
         </label>
         <p class="group-hint">Mehrere Tags mit Komma trennen, z.B. <code>Familie, 1998</code>.</p>
       </div>
+      <div class="toolbar-sep photos-only" aria-hidden="true"></div>
+      <div class="group photos-only">
+        <p class="group-title">Beschreibung</p>
+        <label for="description" class="field" style="gap:.3rem">
+          <span style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Text</span>
+          <input type="text" id="description" placeholder="Kurzbeschreibung des Motivs" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;min-width:14rem" />
+        </label>
+        <p class="group-hint">Wird in die EXIF/XMP-Beschreibung der Datei geschrieben (leer = unverändert).</p>
+      </div>
+      <div class="toolbar-sep photos-only" aria-hidden="true"></div>
+      <div class="group photos-only">
+        <p class="group-title">Dateiname</p>
+        <div class="checks">
+          <label><input type="checkbox" id="renameEnabled" /> Beim Speichern umbenennen</label>
+        </div>
+        <label for="renamePrefix" class="field" style="gap:.3rem">
+          <span style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Basisname</span>
+          <input type="text" id="renamePrefix" value="scan_" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;min-width:10rem" />
+        </label>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <label class="field" style="gap:.3rem">
+            <span style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Startnr.</span>
+            <input type="number" id="renameStart" value="1" min="0" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;width:5rem" />
+          </label>
+          <label class="field" style="gap:.3rem">
+            <span style="font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">Stellen</span>
+            <input type="number" id="renameDigits" value="3" min="1" max="8" style="font:inherit;padding:.45rem .6rem;border:1px solid var(--line);border-radius:8px;width:5rem" />
+          </label>
+        </div>
+        <p class="group-hint" id="renamePreview">Beispiel: scan_001.jpg, scan_002.jpg, …</p>
+      </div>
       <div class="spacer"></div>
       <button type="button" id="btnReload">Daten neu laden</button>
       <button type="button" id="btnAll">Alle</button>
@@ -414,9 +445,10 @@
           <div><span>Digitized</span><b>${escapeHtml(fmt(f.digitized))}</b></div>
           <div><span>Modify</span><b>${escapeHtml(fmt(f.modify))}</b></div>
           <div><span>Tags</span><b>${escapeHtml((f.tags || []).join(", ") || "—")}</b></div>
+          <div><span>Beschreibung</span><b>${escapeHtml(f.description || "—")}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
-        <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong>. Tags werden direkt in die JPEG-Datei geschrieben (EXIF XPKeywords + XMP Subject), keine Extra-Datei.</p>
+        <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong>. Beschreibung und Tags werden in die JPEG-Datei geschrieben (EXIF/XMP).</p>
         ${state.root === "photos" ? `<button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
       `;
       $("btnUseExif")?.addEventListener("click", () => {
@@ -456,6 +488,21 @@
       updateButtons();
     });
 
+    function updateRenamePreview() {
+      const prefix = $("renamePrefix").value || "scan_";
+      const start = Math.max(0, parseInt($("renameStart").value || "1", 10) || 1);
+      const digits = Math.min(8, Math.max(1, parseInt($("renameDigits").value || "3", 10) || 3));
+      const a = String(start).padStart(digits, "0");
+      const b = String(start + 1).padStart(digits, "0");
+      $("renamePreview").innerHTML =
+        `Beispiel bei Auswahl-Reihenfolge: <code>${escapeHtml(prefix)}${a}.jpg</code>, <code>${escapeHtml(prefix)}${b}.jpg</code>, …`;
+    }
+
+    ["renamePrefix", "renameStart", "renameDigits"].forEach((id) => {
+      $(id)?.addEventListener("input", updateRenamePreview);
+    });
+    updateRenamePreview();
+
     $("btnSave").addEventListener("click", async () => {
       const date = $("date").value;
       const time = $("time").value || "12:00";
@@ -463,8 +510,16 @@
         setStatus("Bitte ein Datum wählen.", "err");
         return;
       }
+      const orderedPaths = state.files
+        .filter((f) => state.selected.has(f.path))
+        .map((f) => f.path);
+      if (!orderedPaths.length) {
+        setStatus("Keine Fotos ausgewählt.", "err");
+        return;
+      }
+
       $("btnSave").disabled = true;
-      setStatus(`Speichere ${state.selected.size} Datei(en)…`);
+      setStatus(`Speichere ${orderedPaths.length} Datei(en)…`);
       let data;
       try {
         const res = await fetch("/api/apply", {
@@ -472,9 +527,10 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             root: "photos",
-            paths: [...state.selected],
+            paths: orderedPaths,
             date,
             time,
+            description: $("description").value || "",
             fields: {
               original: $("fOriginal").checked,
               digitized: $("fDigitized").checked,
@@ -483,6 +539,12 @@
             tags: {
               fotoScan: $("tagFotoScan").checked,
               extra: $("tagExtra").value || "",
+            },
+            rename: {
+              enabled: $("renameEnabled").checked,
+              prefix: $("renamePrefix").value || "scan_",
+              start: parseInt($("renameStart").value || "1", 10),
+              digits: parseInt($("renameDigits").value || "3", 10),
             },
           }),
         });
@@ -498,7 +560,9 @@
       let msg, kind;
       if (written > 0 && !errors.length) {
         const tagTxt = (data.tags || []).length ? ` Tags: ${(data.tags || []).join(", ")}.` : "";
-        msg = `Gespeichert in ${written} Datei(en). Neues DateTimeOriginal: ${fmt(data.date)}.${tagTxt}`;
+        const descTxt = data.description ? ` Beschreibung gesetzt.` : "";
+        const renameTxt = data.renamed ? ` Umbenannt mit fortlaufender Nummer.` : "";
+        msg = `Gespeichert in ${written} Datei(en). DateTimeOriginal: ${fmt(data.date)}.${tagTxt}${descTxt}${renameTxt}`;
         kind = "ok";
       } else if (written > 0) {
         msg = `${written} gespeichert, ${errors.length} Fehler: ${errors[0]?.error || "?"}`;
@@ -508,12 +572,20 @@
         kind = "err";
       }
 
+      const newPaths = data.paths || [];
       await load(state.path, {
-        preserveSelection: true,
+        preserveSelection: false,
         bustCache: true,
         statusMessage: msg,
         statusKind: kind,
       });
+      if (newPaths.length) {
+        state.selected = new Set(newPaths.filter((p) => state.files.some((f) => f.path === p)));
+        state.active = [...state.selected][0] || state.active;
+        renderFiles();
+        renderDetail();
+        updateButtons();
+      }
     });
 
     $("btnMove").addEventListener("click", async () => {

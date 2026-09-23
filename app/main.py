@@ -110,6 +110,7 @@ def create_app() -> Flask:
                         "original": meta.get("original"),
                         "digitized": meta.get("digitized"),
                         "modify": meta.get("modify"),
+                        "description": meta.get("description"),
                         "tags": meta.get("tags") or [],
                     }
                 )
@@ -166,6 +167,8 @@ def create_app() -> Flask:
         time_str = data.get("time") or "12:00:00"
         opts = data.get("fields") or {}
         tag_opts = data.get("tags") or {}
+        description = (data.get("description") or "").strip()
+        rename_opts = data.get("rename") or {}
 
         if not paths:
             return jsonify({"ok": False, "error": "Keine Dateien"}), 400
@@ -181,10 +184,21 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Mindestens ein Datumsfeld waehlen"}), 400
 
         tags = collect_tags(tag_opts)
+        do_rename = bool(rename_opts.get("enabled"))
+        rename_prefix = sanitize_basename(str(rename_opts.get("prefix") or "foto"))
+        try:
+            start_num = int(rename_opts.get("start") or 1)
+            digits = int(rename_opts.get("digits") or 3)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "Ungueltige Nummerierung"}), 400
+        if start_num < 0 or digits < 1 or digits > 8:
+            return jsonify({"ok": False, "error": "Nummerierung: Start >= 0, Stellen 1-8"}), 400
 
         written = []
         errors = []
-        for rel in paths:
+        new_selection = []
+
+        for index, rel in enumerate(paths):
             try:
                 path = safe_path(rel, root_name)
                 if not path.is_file() or path.suffix.lower() not in JPEG_EXTS:
@@ -197,9 +211,32 @@ def create_app() -> Flask:
                     set_modify=set_modify,
                     tags=tags,
                     merge_tags=True,
+                    description=description or None,
                 )
+
+                new_rel = rel
+                new_name = path.name
+                if do_rename:
+                    num = start_num + index
+                    suffix = path.suffix.lower() if path.suffix else ".jpg"
+                    candidate = f"{rename_prefix}{num:0{digits}d}{suffix}"
+                    dest = unique_dest(path.parent, candidate)
+                    if dest.resolve() != path.resolve():
+                        path.rename(dest)
+                        path = dest
+                    new_name = path.name
+                    new_rel = rel_of(path, root_name)
+
                 meta = read_exif_meta(path)
-                written.append({"path": rel, **meta})
+                written.append(
+                    {
+                        "path": new_rel,
+                        "from": rel,
+                        "name": new_name,
+                        **meta,
+                    }
+                )
+                new_selection.append(new_rel)
             except Exception as exc:
                 errors.append({"path": rel, "error": str(exc)})
 
@@ -211,6 +248,9 @@ def create_app() -> Flask:
                 "errors": errors,
                 "date": exif_date,
                 "tags": tags,
+                "description": description or None,
+                "renamed": do_rename,
+                "paths": new_selection,
             }
         )
 
@@ -254,6 +294,13 @@ def create_app() -> Flask:
         )
 
     return app
+
+
+def sanitize_basename(name: str) -> str:
+    name = (name or "").strip()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", name)
+    name = name.strip(". ")
+    return name or "foto"
 
 
 def collect_tags(tag_opts: dict) -> list[str]:
