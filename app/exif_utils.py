@@ -92,12 +92,112 @@ def read_exif_meta(path: Path) -> dict:
 
 
 def jpeg_scan_offset(data: bytes) -> Optional[int]:
-    i = 0
-    while i < len(data) - 1:
-        if data[i] == 0xFF and data[i + 1] == 0xDA:
+    """
+    Offset of the SOS marker (start of compressed image data).
+    Must parse JPEG markers — a raw search for FF DA is unsafe because that
+    byte pair can appear inside EXIF/APP segments.
+    """
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    i = 2
+    n = len(data)
+    while i < n - 1:
+        if data[i] != 0xFF:
+            return None
+        # Skip fill bytes (FF FF …)
+        while i < n - 1 and data[i] == 0xFF and data[i + 1] == 0xFF:
+            i += 1
+        if i >= n - 1:
+            return None
+        marker = data[i + 1]
+        if marker == 0xDA:  # Start Of Scan
             return i
-        i += 1
+        if marker == 0xD9:  # EOI before SOS — invalid
+            return None
+        # Standalone markers without length
+        if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0x01, 0x00):
+            i += 2
+            continue
+        if i + 3 >= n:
+            return None
+        seglen = int.from_bytes(data[i + 2 : i + 4], "big")
+        if seglen < 2:
+            return None
+        i += 2 + seglen
     return None
+
+
+def _is_exif_app1(jpeg: bytes, offset: int, seglen: int) -> bool:
+    """True if segment at offset is APP1 with Exif payload."""
+    if jpeg[offset + 1] != 0xE1 or seglen < 8:
+        return False
+    payload = jpeg[offset + 4 : offset + 2 + seglen]
+    return payload.startswith(b"Exif\x00\x00")
+
+
+def _replace_exif_app1(jpeg: bytes, exif_bytes: bytes) -> bytes:
+    """
+    Insert/replace APP1 Exif while copying SOS..EOF byte-identically.
+    exif_bytes: output of piexif.dump() (normally starts with b'Exif\\x00\\x00').
+    """
+    if jpeg[:2] != b"\xff\xd8":
+        raise ValueError("Kein JPEG")
+    if not exif_bytes.startswith(b"Exif"):
+        exif_bytes = b"Exif\x00\x00" + exif_bytes
+    size = len(exif_bytes) + 2
+    if size > 0xFFFF:
+        raise ValueError("EXIF-Segment zu gross")
+    app1 = b"\xff\xe1" + size.to_bytes(2, "big") + exif_bytes
+
+    header = bytearray()
+    i = 2
+    n = len(jpeg)
+    sos_at: Optional[int] = None
+    while i < n - 1:
+        if jpeg[i] != 0xFF:
+            raise ValueError("Ungueltiges JPEG")
+        while i < n - 1 and jpeg[i] == 0xFF and jpeg[i + 1] == 0xFF:
+            header.append(0xFF)
+            i += 1
+        marker = jpeg[i + 1]
+        if marker == 0xDA:
+            sos_at = i
+            break
+        if marker == 0xD9:
+            raise ValueError("Ungueltiges JPEG (EOI vor SOS)")
+        if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0x01, 0x00):
+            header.extend(jpeg[i : i + 2])
+            i += 2
+            continue
+        if i + 3 >= n:
+            raise ValueError("Ungueltiges JPEG")
+        seglen = int.from_bytes(jpeg[i + 2 : i + 4], "big")
+        if seglen < 2:
+            raise ValueError("Ungueltiges JPEG (Segmentlaenge)")
+        if not _is_exif_app1(jpeg, i, seglen):
+            header.extend(jpeg[i : i + 2 + seglen])
+        i += 2 + seglen
+
+    if sos_at is None:
+        raise ValueError("Ungueltiges JPEG (kein SOS)")
+
+    # Prefer EXIF after JFIF APP0 if present as first header segment
+    out = bytearray(b"\xff\xd8")
+    inserted = False
+    j = 0
+    h = bytes(header)
+    if len(h) >= 4 and h[0] == 0xFF and h[1] == 0xE0:
+        hlen = int.from_bytes(h[2:4], "big")
+        if hlen >= 2 and 2 + hlen <= len(h):
+            out.extend(h[: 2 + hlen])
+            out.extend(app1)
+            out.extend(h[2 + hlen :])
+            inserted = True
+    if not inserted:
+        out.extend(app1)
+        out.extend(h)
+    out.extend(jpeg[sos_at:])
+    return bytes(out)
 
 
 def _split_tags(text: str) -> list[str]:
@@ -290,6 +390,10 @@ def patch_exif_dates(
 
     exif.setdefault("0th", {})
     exif.setdefault("Exif", {})
+    # Avoid piexif rewriting/breaking embedded thumbnails
+    exif["thumbnail"] = None
+    if "1st" in exif:
+        exif["1st"] = {}
 
     if date_str:
         encoded = date_str.encode("utf-8")
@@ -318,7 +422,7 @@ def patch_exif_dates(
     if write_description and desc_text is not None:
         # ASCII-ish ImageDescription + Unicode XPComment for Immich/Windows
         try:
-            exif["0th"][piexif.ImageIFD.ImageDescription] = desc_text.encode("utf-8")
+            exif["0th"][piexif.ImageIFD.ImageDescription] = desc_text.encode("ascii", errors="replace")
         except Exception:
             exif["0th"][piexif.ImageIFD.ImageDescription] = desc_text.encode("latin-1", errors="replace")
         exif["0th"][piexif.ImageIFD.XPComment] = _encode_xp_string(desc_text)
@@ -326,16 +430,20 @@ def patch_exif_dates(
     exif_bytes = piexif.dump(exif)
     tmp = path.with_name(path.name + ".exiftmp")
 
+    # Prefer our segment splice (guarantees identical image payload)
     try:
-        maybe = piexif.insert(exif_bytes, raw)
-        if isinstance(maybe, (bytes, bytearray)):
-            out = bytes(maybe)
-        else:
+        out = _replace_exif_app1(raw, exif_bytes)
+    except Exception:
+        try:
+            maybe = piexif.insert(exif_bytes, raw)
+            if isinstance(maybe, (bytes, bytearray)):
+                out = bytes(maybe)
+            else:
+                piexif.insert(exif_bytes, str(path), str(tmp))
+                out = tmp.read_bytes()
+        except (TypeError, ValueError):
             piexif.insert(exif_bytes, str(path), str(tmp))
             out = tmp.read_bytes()
-    except (TypeError, ValueError):
-        piexif.insert(exif_bytes, str(path), str(tmp))
-        out = tmp.read_bytes()
 
     xmp_tags = final_tags if final_tags is not None else (existing_meta.get("tags") or [])
     xmp_desc = desc_text if write_description else existing_meta.get("description")
@@ -346,7 +454,10 @@ def patch_exif_dates(
     if after_sos is None or out[after_sos:] != before_payload:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
-        raise RuntimeError("Abbruch: Bilddaten haetten sich geaendert")
+        raise RuntimeError(
+            "Abbruch: Bilddaten haetten sich geaendert "
+            "(Datei ggf. unuebliches JPEG — bitte melden)"
+        )
 
     tmp.write_bytes(out)
     tmp.replace(path)
