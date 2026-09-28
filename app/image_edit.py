@@ -185,7 +185,9 @@ def apply_document_scan(
     out_w = max(32, min(out_w, w * 3))
     out_h = max(32, min(out_h, h * 3))
 
-    quad = (pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], pts[3][0], pts[3][1])
+    # Pillow QUAD: upper-left, lower-left, lower-right, upper-right (not clockwise).
+    ul, ur, lr, ll = pts
+    quad = (ul[0], ul[1], ll[0], ll[1], lr[0], lr[1], ur[0], ur[1])
     return im.transform((out_w, out_h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
 
 

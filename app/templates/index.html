@@ -244,6 +244,19 @@
       pointer-events: none;
     }
     .adjust-scan-handle:active { cursor: grabbing; }
+    .scan-loupe {
+      position: absolute;
+      width: 168px; height: 168px;
+      border-radius: 50%;
+      overflow: hidden;
+      border: 3px solid #16794c;
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+      pointer-events: none;
+      z-index: 6;
+      background: #111;
+    }
+    .scan-loupe[hidden] { display: none !important; }
+    .scan-loupe canvas { display: block; width: 168px; height: 168px; }
     .adjust-preview-wrap.is-scanning { cursor: default; }
     .adjust-scan-box,
     .adjust-pixel-box {
@@ -432,6 +445,9 @@
               <img id="adjustPreview" alt="Vorschau Anpassung" draggable="false" />
             </div>
             <div class="adjust-overlay" id="adjustOverlay"></div>
+            <div class="scan-loupe" id="scanLoupe" hidden>
+              <canvas id="scanLoupeCanvas" width="168" height="168"></canvas>
+            </div>
           </div>
           <div class="adjust-nav">
             <button type="button" id="btnAdjPrev" title="Vorheriges Foto">← Vorheriges</button>
@@ -752,6 +768,7 @@
       $("btnScanMode").textContent = adjustDrawMode === "scan" ? "Ecken aktiv" : "Ecken verschieben";
       $("adjustViewport").classList.toggle("is-selecting", adjustDrawMode === "pixel");
       $("adjustViewport").classList.toggle("is-scanning", adjustDrawMode === "scan");
+      if (!isScan) hideScanLoupe();
       updateAdjustModeHint();
       renderAdjustOverlay();
       updateButtons();
@@ -842,6 +859,54 @@
       zoomState.x = 0;
       zoomState.y = 0;
       applyZoomTransform();
+    }
+
+    function hideScanLoupe() {
+      $("scanLoupe").hidden = true;
+    }
+
+    function updateScanLoupe(clientX, clientY, norm) {
+      const loupe = $("scanLoupe");
+      const canvas = $("scanLoupeCanvas");
+      const img = $("adjustPreview");
+      if (!norm || !img.naturalWidth) {
+        loupe.hidden = true;
+        return;
+      }
+      const size = 168;
+      const mag = 4;
+      const ctx = canvas.getContext("2d");
+      const src = size / mag;
+      const sx = norm.x * img.naturalWidth - src / 2;
+      const sy = norm.y * img.naturalHeight - src / 2;
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, size, size);
+      ctx.drawImage(img, sx, sy, src, src, 0, 0, size, size);
+      ctx.strokeStyle = "rgba(255,255,255,.95)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(size / 2, 8);
+      ctx.lineTo(size / 2, size - 8);
+      ctx.moveTo(8, size / 2);
+      ctx.lineTo(size - 8, size / 2);
+      ctx.stroke();
+      ctx.strokeStyle = "#16794c";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, 5, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const vp = $("adjustViewport");
+      const rect = vp.getBoundingClientRect();
+      let x = clientX - rect.left + 36;
+      let y = clientY - rect.top - size - 20;
+      if (y < 8) y = clientY - rect.top + 28;
+      if (x + size > rect.width - 8) x = clientX - rect.left - size - 36;
+      if (x < 8) x = 8;
+      loupe.style.left = `${x}px`;
+      loupe.style.top = `${y}px`;
+      loupe.hidden = false;
     }
 
     function clientToNorm(clientX, clientY) {
@@ -1074,6 +1139,8 @@
             if (Number.isNaN(scanState.dragIndex)) scanState.dragIndex = -1;
             vp.setPointerCapture(e.pointerId);
             e.preventDefault();
+            const p = clientToNorm(e.clientX, e.clientY);
+            if (p && scanState.dragIndex >= 0) updateScanLoupe(e.clientX, e.clientY, p);
             return;
           }
         }
@@ -1101,6 +1168,7 @@
           if (!p) return;
           scanState.corners[scanState.dragIndex] = { x: p.x, y: p.y };
           renderAdjustOverlay();
+          updateScanLoupe(e.clientX, e.clientY, p);
           updateButtons();
           return;
         }
@@ -1125,6 +1193,7 @@
       const endPointer = (e) => {
         if (scanState.dragIndex >= 0) {
           scanState.dragIndex = -1;
+          hideScanLoupe();
           try {
             vp.releasePointerCapture(e.pointerId);
           } catch (_) {}
