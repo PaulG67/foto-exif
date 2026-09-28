@@ -143,6 +143,31 @@ def _is_neutral(
     )
 
 
+def _quad_warp(im: Image.Image, quad: tuple[float, ...]) -> Image.Image:
+    """QUAD: source ul, ur, lr, ll → output rectangle (same size)."""
+    w, h = im.size
+    mx, my = w * 0.38, h * 0.38
+
+    def clx(x: float) -> float:
+        return max(-mx, min(w + mx, x))
+
+    def cly(y: float) -> float:
+        return max(-my, min(h + my, y))
+
+    x0, y0, x1, y1, x2, y2, x3, y3 = quad
+    q = (
+        clx(x0),
+        cly(y0),
+        clx(x1),
+        cly(y1),
+        clx(x2),
+        cly(y2),
+        clx(x3),
+        cly(y3),
+    )
+    return im.transform((w, h), Image.Transform.QUAD, q, Image.Resampling.BICUBIC)
+
+
 def apply_perspective(
     im: Image.Image,
     *,
@@ -150,9 +175,9 @@ def apply_perspective(
     horizontal: float = 0.0,
 ) -> Image.Image:
     """
-    3D-Tilt / Trapez-Korrektur (kein 90°-Drehen).
-    vertical (+): obere Kante nach hinten (verengt oben)
-    horizontal (+): rechts nach hinten, links nach vorne
+    Trapez-Korrektur (kein 90°-Drehen), zwei unabhängige Schritte:
+    vertical (+): obere Kante nach hinten (Oben verengt)
+    horizontal (+): rechts nach hinten / links nach vorne (linke Kante unten korrigieren)
     """
     vertical = _clamp_perspective(vertical)
     horizontal = _clamp_perspective(horizontal)
@@ -162,14 +187,17 @@ def apply_perspective(
     if w < 8 or h < 8:
         return im
 
-    dx = (vertical / 100.0) * w * 0.26
-    dy = (horizontal / 100.0) * h * 0.26
-    dx = max(-w * 0.34, min(w * 0.34, dx))
-    dy = max(-h * 0.34, min(h * 0.34, dy))
+    if abs(vertical) >= 0.05:
+        # Symmetrisch obere Kante ein-/ausziehen
+        s = (vertical / 100.0) * w * 0.34
+        im = _quad_warp(im, (s, 0.0, w - s, 0.0, w, h, 0.0, h))
 
-    # QUAD: ul, ur, lr, ll → output rectangle (keine Rotation, nur Neigung)
-    quad = (dx, 0.0, w - dx, dy, w, h, 0.0, h)
-    return im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+    if abs(horizontal) >= 0.05:
+        # Linke Kante: unten nach rechts (+) oder links (−) — simuliert links vor / rechts hinten
+        s = (horizontal / 100.0) * w * 0.34
+        im = _quad_warp(im, (0.0, 0.0, w, 0.0, w, h, s, h))
+
+    return im
 
 
 def apply_fine_rotation(im: Image.Image, degrees: float) -> Image.Image:
