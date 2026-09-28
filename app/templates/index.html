@@ -214,6 +214,7 @@
       border-style: dashed;
       background: rgba(226, 75, 74, .18);
     }
+    .adjust-persp-box,
     .adjust-pixel-box {
       display: grid; gap: .55rem;
       padding: .7rem .8rem;
@@ -221,6 +222,7 @@
       border-radius: 10px;
       background: #fff;
     }
+    .adjust-persp-box .group-title { margin: 0; }
     .adjust-pixel-box .group-title { margin: 0; }
     .adjust-pixel-actions { display: flex; flex-wrap: wrap; gap: .45rem; }
     .adjust-pixel-actions button.active {
@@ -432,6 +434,18 @@
             <label>Sättigung <span id="valSaturation">1.00</span></label>
             <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
           </div>
+          <div class="adjust-persp-box">
+            <p class="group-title">Perspektive</p>
+            <p class="group-hint">Für Smartphone-Fotos schräg von oben/seitlich — Linien gerader wirken lassen (Trapez-Korrektur).</p>
+            <div class="slider-row">
+              <label>Oben / Unten <span id="valPerspVert">0</span></label>
+              <input type="range" id="adjPerspVert" min="-30" max="30" step="1" value="0" />
+            </div>
+            <div class="slider-row">
+              <label>Links / Rechts <span id="valPerspHoriz">0</span></label>
+              <input type="range" id="adjPerspHoriz" min="-30" max="30" step="1" value="0" />
+            </div>
+          </div>
           <div class="adjust-pixel-box">
             <p class="group-title">Bereich verpixeln</p>
             <p class="group-hint" id="pixelRegionHint">Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.</p>
@@ -571,6 +585,8 @@
         contrast: parseFloat($("adjContrast").value) || 1,
         saturation: parseFloat($("adjSaturation").value) || 1,
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
+        persp_vertical: parseFloat($("adjPerspVert").value) || 0,
+        persp_horizontal: parseFloat($("adjPerspHoriz").value) || 0,
         regions: pixelateState.regions.map((r) => ({ ...r })),
       };
     }
@@ -581,6 +597,8 @@
         Math.abs(v.brightness - 1) < 0.005 &&
         Math.abs(v.contrast - 1) < 0.005 &&
         Math.abs(v.saturation - 1) < 0.005 &&
+        Math.abs(v.persp_vertical) < 0.05 &&
+        Math.abs(v.persp_horizontal) < 0.05 &&
         !v.regions.length
       );
     }
@@ -603,6 +621,8 @@
       $("valBrightness").textContent = v.brightness.toFixed(2);
       $("valContrast").textContent = v.contrast.toFixed(2);
       $("valSaturation").textContent = v.saturation.toFixed(2);
+      $("valPerspVert").textContent = String(Math.round(v.persp_vertical));
+      $("valPerspHoriz").textContent = String(Math.round(v.persp_horizontal));
       $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
@@ -741,6 +761,8 @@
       $("adjBrightness").value = "1";
       $("adjContrast").value = "1";
       $("adjSaturation").value = "1";
+      $("adjPerspVert").value = "0";
+      $("adjPerspHoriz").value = "0";
       $("adjPixel").value = "0.045";
       setPixelateMode(false);
       clearPixelRegions({ refresh: false });
@@ -802,6 +824,8 @@
           contrast: String(v.contrast),
           saturation: String(v.saturation),
           pixel_strength: String(v.pixel_strength),
+          persp_vertical: String(v.persp_vertical),
+          persp_horizontal: String(v.persp_horizontal),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
         try {
@@ -844,6 +868,8 @@
           contrast: String(v.contrast),
           saturation: String(v.saturation),
           pixel_strength: String(v.pixel_strength),
+          persp_vertical: String(v.persp_vertical),
+          persp_horizontal: String(v.persp_horizontal),
           t: String(state.cacheBust),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
@@ -1207,7 +1233,7 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation", "adjPixel"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjPerspVert", "adjPerspHoriz", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
     $("btnPixelMode").addEventListener("click", () => setPixelateMode(!pixelateState.mode));
@@ -1234,6 +1260,8 @@
             contrast: v.contrast,
             saturation: v.saturation,
             pixel_strength: v.pixel_strength,
+            persp_vertical: v.persp_vertical,
+            persp_horizontal: v.persp_horizontal,
             regions: v.regions,
           }),
         });
@@ -1252,6 +1280,9 @@
           bits.push("Farbe");
         }
         if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
+        if (Math.abs(v.persp_vertical) > 0.05 || Math.abs(v.persp_horizontal) > 0.05) {
+          bits.push("Perspektive");
+        }
         resetAdjustSliders();
         await load(state.path, {
           preserveSelection: true,

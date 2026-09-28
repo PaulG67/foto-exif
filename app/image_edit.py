@@ -95,11 +95,22 @@ def encode_regions(regions: list[tuple[float, float, float, float]]) -> str:
     return ";".join(f"{x:.5f},{y:.5f},{w:.5f},{h:.5f}" for x, y, w, h in regions)
 
 
+def _clamp_perspective(value: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(-30.0, min(30.0, v))
+
+
 def _is_neutral(
     brightness: float,
     contrast: float,
     saturation: float,
     regions: list[tuple[float, float, float, float]] | None = None,
+    *,
+    persp_vertical: float = 0.0,
+    persp_horizontal: float = 0.0,
 ) -> bool:
     if regions:
         return False
@@ -107,7 +118,40 @@ def _is_neutral(
         abs(brightness - 1.0) < 0.001
         and abs(contrast - 1.0) < 0.001
         and abs(saturation - 1.0) < 0.001
+        and abs(_clamp_perspective(persp_vertical)) < 0.05
+        and abs(_clamp_perspective(persp_horizontal)) < 0.05
     )
+
+
+def apply_perspective(
+    im: Image.Image,
+    *,
+    vertical: float = 0.0,
+    horizontal: float = 0.0,
+) -> Image.Image:
+    """
+    Mild keystone correction (smartphone / schräg von oben).
+    vertical: top edge narrower (+) / wider (−) in source → straightens vertical convergence
+    horizontal: left edge tilt correction
+    """
+    vertical = _clamp_perspective(vertical)
+    horizontal = _clamp_perspective(horizontal)
+    w, h = im.size
+    if w < 8 or h < 8:
+        return im
+
+    if abs(vertical) >= 0.05:
+        dx = (vertical / 100.0) * w * 0.28
+        dx = max(-w * 0.32, min(w * 0.32, dx))
+        quad = (dx, 0, w - dx, 0, w, h, 0, h)
+        im = im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+
+    if abs(horizontal) >= 0.05:
+        dy = (horizontal / 100.0) * h * 0.28
+        dy = max(-h * 0.32, min(h * 0.32, dy))
+        quad = (0, dy, w, 0, w, h, 0, h - dy)
+        im = im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+    return im
 
 
 def pixelate_regions(
@@ -159,6 +203,23 @@ def _enhance_rgb(
     return im
 
 
+def _process_adjusted_rgb(
+    im: Image.Image,
+    *,
+    brightness: float,
+    contrast: float,
+    saturation: float,
+    regions: list[tuple[float, float, float, float]],
+    pixel_strength: float,
+    persp_vertical: float,
+    persp_horizontal: float,
+) -> Image.Image:
+    im = apply_perspective(im, vertical=persp_vertical, horizontal=persp_horizontal)
+    im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
+    pixelate_regions(im, regions, pixel_strength)
+    return im
+
+
 def render_adjusted_jpeg(
     path: Path,
     *,
@@ -167,6 +228,8 @@ def render_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    persp_vertical: float = 0.0,
+    persp_horizontal: float = 0.0,
     quality: int = 90,
     max_side: int | None = None,
 ) -> bytes:
@@ -175,6 +238,8 @@ def render_adjusted_jpeg(
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
     regions = regions or []
+    persp_vertical = _clamp_perspective(persp_vertical)
+    persp_horizontal = _clamp_perspective(persp_horizontal)
     quality = max(60, min(98, int(quality)))
 
     with Image.open(path) as im:
@@ -182,8 +247,16 @@ def render_adjusted_jpeg(
         im = im.convert("RGB")
         if max_side:
             im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-        im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
-        pixelate_regions(im, regions, pixel_strength)
+        im = _process_adjusted_rgb(
+            im,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            regions=regions,
+            pixel_strength=pixel_strength,
+            persp_vertical=persp_vertical,
+            persp_horizontal=persp_horizontal,
+        )
         buf = BytesIO()
         im.save(buf, format="JPEG", quality=quality, optimize=True)
         return buf.getvalue()
@@ -197,6 +270,8 @@ def build_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    persp_vertical: float = 0.0,
+    persp_horizontal: float = 0.0,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> bytes | None:
     """
@@ -207,7 +282,16 @@ def build_adjusted_jpeg(
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
     regions = regions or []
-    if _is_neutral(brightness, contrast, saturation, regions):
+    persp_vertical = _clamp_perspective(persp_vertical)
+    persp_horizontal = _clamp_perspective(persp_horizontal)
+    if _is_neutral(
+        brightness,
+        contrast,
+        saturation,
+        regions,
+        persp_vertical=persp_vertical,
+        persp_horizontal=persp_horizontal,
+    ):
         return None
 
     quality = max(60, min(98, int(quality)))
@@ -231,8 +315,16 @@ def build_adjusted_jpeg(
     with Image.open(BytesIO(original)) as im:
         im = ImageOps.exif_transpose(im)
         im = im.convert("RGB")
-        im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
-        pixelate_regions(im, regions, pixel_strength)
+        im = _process_adjusted_rgb(
+            im,
+            brightness=brightness,
+            contrast=contrast,
+            saturation=saturation,
+            regions=regions,
+            pixel_strength=pixel_strength,
+            persp_vertical=persp_vertical,
+            persp_horizontal=persp_horizontal,
+        )
         buf = BytesIO()
         save_kw: dict = {"format": "JPEG", "quality": quality, "optimize": True}
         if exif_bytes:
@@ -255,6 +347,8 @@ def estimate_adjusted_size(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    persp_vertical: float = 0.0,
+    persp_horizontal: float = 0.0,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> int:
     """Byte size after apply (or current size if adjustments are neutral)."""
@@ -265,6 +359,8 @@ def estimate_adjusted_size(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
+        persp_vertical=persp_vertical,
+        persp_horizontal=persp_horizontal,
         quality=quality,
     )
     if out is None:
@@ -280,6 +376,8 @@ def apply_image_adjustments(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    persp_vertical: float = 0.0,
+    persp_horizontal: float = 0.0,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> None:
     """
@@ -294,6 +392,8 @@ def apply_image_adjustments(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
+        persp_vertical=persp_vertical,
+        persp_horizontal=persp_horizontal,
         quality=quality,
     )
     if out is None:

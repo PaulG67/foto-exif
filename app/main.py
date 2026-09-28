@@ -182,6 +182,8 @@ def create_app() -> Flask:
                 saturation=float(request.args.get("saturation", 1)),
                 regions=regions,
                 pixel_strength=float(request.args.get("pixel_strength", 0.045)),
+                persp_vertical=float(request.args.get("persp_vertical", 0)),
+                persp_horizontal=float(request.args.get("persp_horizontal", 0)),
                 quality=88,
                 max_side=1600,
             )
@@ -201,6 +203,8 @@ def create_app() -> Flask:
             contrast = float(request.args.get("contrast", 1))
             saturation = float(request.args.get("saturation", 1))
             pixel_strength = float(request.args.get("pixel_strength", 0.045))
+            persp_vertical = float(request.args.get("persp_vertical", 0))
+            persp_horizontal = float(request.args.get("persp_horizontal", 0))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
         regions = parse_regions(request.args.get("regions", ""))
@@ -213,6 +217,8 @@ def create_app() -> Flask:
                 saturation=saturation,
                 regions=regions,
                 pixel_strength=pixel_strength,
+                persp_vertical=persp_vertical,
+                persp_horizontal=persp_horizontal,
             )
             return jsonify(
                 {
@@ -237,6 +243,8 @@ def create_app() -> Flask:
             contrast = float(data.get("contrast", 1))
             saturation = float(data.get("saturation", 1))
             pixel_strength = float(data.get("pixel_strength", 0.045))
+            persp_vertical = float(data.get("persp_vertical", 0))
+            persp_horizontal = float(data.get("persp_horizontal", 0))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
         regions = parse_regions(data.get("regions"))
@@ -252,6 +260,8 @@ def create_app() -> Flask:
                 saturation=saturation,
                 regions=regions,
                 pixel_strength=pixel_strength,
+                persp_vertical=persp_vertical,
+                persp_horizontal=persp_horizontal,
             )
             meta = read_exif_meta(path)
             return jsonify(
