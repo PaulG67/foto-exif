@@ -103,6 +103,21 @@ def _clamp_perspective(value: float) -> float:
     return max(-30.0, min(30.0, v))
 
 
+def _clamp_rotation(value: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(-15.0, min(15.0, v))
+
+
+def parse_crop(raw: Any) -> tuple[float, float, float, float] | None:
+    regions = parse_regions(raw)
+    if not regions:
+        return None
+    return regions[0]
+
+
 def _is_neutral(
     brightness: float,
     contrast: float,
@@ -111,8 +126,12 @@ def _is_neutral(
     *,
     persp_vertical: float = 0.0,
     persp_horizontal: float = 0.0,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
 ) -> bool:
     if regions:
+        return False
+    if crop:
         return False
     return (
         abs(brightness - 1.0) < 0.001
@@ -120,6 +139,7 @@ def _is_neutral(
         and abs(saturation - 1.0) < 0.001
         and abs(_clamp_perspective(persp_vertical)) < 0.05
         and abs(_clamp_perspective(persp_horizontal)) < 0.05
+        and abs(_clamp_rotation(rotate_deg)) < 0.05
     )
 
 
@@ -130,28 +150,59 @@ def apply_perspective(
     horizontal: float = 0.0,
 ) -> Image.Image:
     """
-    Mild keystone correction (smartphone / schräg von oben).
-    vertical: top edge narrower (+) / wider (−) in source → straightens vertical convergence
-    horizontal: left edge tilt correction
+    3D-Tilt / Trapez-Korrektur (kein 90°-Drehen).
+    vertical (+): obere Kante nach hinten (verengt oben)
+    horizontal (+): rechts nach hinten, links nach vorne
     """
     vertical = _clamp_perspective(vertical)
     horizontal = _clamp_perspective(horizontal)
+    if abs(vertical) < 0.05 and abs(horizontal) < 0.05:
+        return im
     w, h = im.size
     if w < 8 or h < 8:
         return im
 
-    if abs(vertical) >= 0.05:
-        dx = (vertical / 100.0) * w * 0.28
-        dx = max(-w * 0.32, min(w * 0.32, dx))
-        quad = (dx, 0, w - dx, 0, w, h, 0, h)
-        im = im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+    dx = (vertical / 100.0) * w * 0.26
+    dy = (horizontal / 100.0) * h * 0.26
+    dx = max(-w * 0.34, min(w * 0.34, dx))
+    dy = max(-h * 0.34, min(h * 0.34, dy))
 
-    if abs(horizontal) >= 0.05:
-        dy = (horizontal / 100.0) * h * 0.28
-        dy = max(-h * 0.32, min(h * 0.32, dy))
-        quad = (0, dy, w, 0, w, h, 0, h - dy)
-        im = im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
-    return im
+    # QUAD: ul, ur, lr, ll → output rectangle (keine Rotation, nur Neigung)
+    quad = (dx, 0.0, w - dx, dy, w, h, 0.0, h)
+    return im.transform((w, h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+
+
+def apply_fine_rotation(im: Image.Image, degrees: float) -> Image.Image:
+    """Horizont gerade ziehen — wenige Grad, mit weißem Rand."""
+    degrees = _clamp_rotation(degrees)
+    if abs(degrees) < 0.05:
+        return im
+    return im.rotate(
+        -degrees,
+        resample=Image.Resampling.BICUBIC,
+        expand=True,
+        fillcolor=(255, 255, 255),
+    )
+
+
+def apply_crop_norm(
+    im: Image.Image, crop: tuple[float, float, float, float] | None
+) -> Image.Image:
+    if not crop:
+        return im
+    nx, ny, nw, nh = crop
+    w, h = im.size
+    x0 = int(round(nx * w))
+    y0 = int(round(ny * h))
+    x1 = int(round((nx + nw) * w))
+    y1 = int(round((ny + nh) * h))
+    x0 = max(0, min(w - 1, x0))
+    y0 = max(0, min(h - 1, y0))
+    x1 = max(x0 + 1, min(w, x1))
+    y1 = max(y0 + 1, min(h, y1))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return im
+    return im.crop((x0, y0, x1, y1))
 
 
 def pixelate_regions(
@@ -213,8 +264,12 @@ def _process_adjusted_rgb(
     pixel_strength: float,
     persp_vertical: float,
     persp_horizontal: float,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
 ) -> Image.Image:
     im = apply_perspective(im, vertical=persp_vertical, horizontal=persp_horizontal)
+    im = apply_fine_rotation(im, rotate_deg)
+    im = apply_crop_norm(im, crop)
     im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
     pixelate_regions(im, regions, pixel_strength)
     return im
@@ -230,6 +285,8 @@ def render_adjusted_jpeg(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     persp_vertical: float = 0.0,
     persp_horizontal: float = 0.0,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
     quality: int = 90,
     max_side: int | None = None,
 ) -> bytes:
@@ -240,6 +297,7 @@ def render_adjusted_jpeg(
     regions = regions or []
     persp_vertical = _clamp_perspective(persp_vertical)
     persp_horizontal = _clamp_perspective(persp_horizontal)
+    rotate_deg = _clamp_rotation(rotate_deg)
     quality = max(60, min(98, int(quality)))
 
     with Image.open(path) as im:
@@ -256,6 +314,8 @@ def render_adjusted_jpeg(
             pixel_strength=pixel_strength,
             persp_vertical=persp_vertical,
             persp_horizontal=persp_horizontal,
+            rotate_deg=rotate_deg,
+            crop=crop,
         )
         buf = BytesIO()
         im.save(buf, format="JPEG", quality=quality, optimize=True)
@@ -272,6 +332,8 @@ def build_adjusted_jpeg(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     persp_vertical: float = 0.0,
     persp_horizontal: float = 0.0,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> bytes | None:
     """
@@ -284,6 +346,7 @@ def build_adjusted_jpeg(
     regions = regions or []
     persp_vertical = _clamp_perspective(persp_vertical)
     persp_horizontal = _clamp_perspective(persp_horizontal)
+    rotate_deg = _clamp_rotation(rotate_deg)
     if _is_neutral(
         brightness,
         contrast,
@@ -291,6 +354,8 @@ def build_adjusted_jpeg(
         regions,
         persp_vertical=persp_vertical,
         persp_horizontal=persp_horizontal,
+        rotate_deg=rotate_deg,
+        crop=crop,
     ):
         return None
 
@@ -324,6 +389,8 @@ def build_adjusted_jpeg(
             pixel_strength=pixel_strength,
             persp_vertical=persp_vertical,
             persp_horizontal=persp_horizontal,
+            rotate_deg=rotate_deg,
+            crop=crop,
         )
         buf = BytesIO()
         save_kw: dict = {"format": "JPEG", "quality": quality, "optimize": True}
@@ -349,6 +416,8 @@ def estimate_adjusted_size(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     persp_vertical: float = 0.0,
     persp_horizontal: float = 0.0,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> int:
     """Byte size after apply (or current size if adjustments are neutral)."""
@@ -361,6 +430,8 @@ def estimate_adjusted_size(
         pixel_strength=pixel_strength,
         persp_vertical=persp_vertical,
         persp_horizontal=persp_horizontal,
+        rotate_deg=rotate_deg,
+        crop=crop,
         quality=quality,
     )
     if out is None:
@@ -378,6 +449,8 @@ def apply_image_adjustments(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     persp_vertical: float = 0.0,
     persp_horizontal: float = 0.0,
+    rotate_deg: float = 0.0,
+    crop: tuple[float, float, float, float] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> None:
     """
@@ -394,6 +467,8 @@ def apply_image_adjustments(
         pixel_strength=pixel_strength,
         persp_vertical=persp_vertical,
         persp_horizontal=persp_horizontal,
+        rotate_deg=rotate_deg,
+        crop=crop,
         quality=quality,
     )
     if out is None:

@@ -214,6 +214,13 @@
       border-style: dashed;
       background: rgba(226, 75, 74, .18);
     }
+    .adjust-region.is-crop {
+      border-color: #16794c;
+      background: rgba(22, 121, 76, .12);
+    }
+    .adjust-region.is-crop.is-draft {
+      background: rgba(22, 121, 76, .2);
+    }
     .adjust-persp-box,
     .adjust-pixel-box {
       display: grid; gap: .55rem;
@@ -435,15 +442,27 @@
             <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
           </div>
           <div class="adjust-persp-box">
-            <p class="group-title">Perspektive</p>
-            <p class="group-hint">Für Smartphone-Fotos schräg von oben/seitlich — Linien gerader wirken lassen (Trapez-Korrektur).</p>
+            <p class="group-title">Perspektive &amp; Gerade</p>
+            <p class="group-hint">Kein 90°-Drehen — hier wird <strong>neigen/begradigen</strong> (Trapez). Für schiefe Aufnahmen zuerst Perspektive, dann feine Grad-Korrektur.</p>
             <div class="slider-row">
-              <label>Oben / Unten <span id="valPerspVert">0</span></label>
+              <label>Oben hinten (+) / vorne (−) <span id="valPerspVert">0</span></label>
               <input type="range" id="adjPerspVert" min="-30" max="30" step="1" value="0" />
             </div>
             <div class="slider-row">
-              <label>Links / Rechts <span id="valPerspHoriz">0</span></label>
+              <label>Rechts hinten (+), links vorne (−) <span id="valPerspHoriz">0</span></label>
               <input type="range" id="adjPerspHoriz" min="-30" max="30" step="1" value="0" />
+            </div>
+            <div class="slider-row">
+              <label>Gerade ausrichten (°) <span id="valRotateDeg">0.0</span></label>
+              <input type="range" id="adjRotateDeg" min="-15" max="15" step="0.1" value="0" />
+            </div>
+          </div>
+          <div class="adjust-persp-box">
+            <p class="group-title">Zuschneiden</p>
+            <p class="group-hint" id="cropRegionHint">Rechteck auf der Vorschau markieren — alles außerhalb wird entfernt.</p>
+            <div class="adjust-pixel-actions">
+              <button type="button" id="btnCropMode">Zuschnitt markieren</button>
+              <button type="button" id="btnCropClear" disabled>Zuschnitt löschen</button>
             </div>
           </div>
           <div class="adjust-pixel-box">
@@ -527,6 +546,7 @@
         !adjustIsNeutral();
       $("btnAdjApply").disabled = !canAdj;
       $("btnPixelClear").disabled = !pixelateState.regions.length;
+      $("btnCropClear").disabled = !cropState.region;
       updateAdjustNav();
     }
 
@@ -570,9 +590,16 @@
     let adjustSizeTimer = null;
     let adjustSizeAbort = null;
     const zoomState = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0, path: null };
+    let adjustDrawMode = null;
     const pixelateState = {
-      mode: false,
       regions: [],
+      draft: null,
+      drawing: false,
+      startX: 0,
+      startY: 0,
+    };
+    const cropState = {
+      region: null,
       draft: null,
       drawing: false,
       startX: 0,
@@ -587,7 +614,9 @@
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
         persp_vertical: parseFloat($("adjPerspVert").value) || 0,
         persp_horizontal: parseFloat($("adjPerspHoriz").value) || 0,
+        rotate_deg: parseFloat($("adjRotateDeg").value) || 0,
         regions: pixelateState.regions.map((r) => ({ ...r })),
+        crop: cropState.region ? { ...cropState.region } : null,
       };
     }
 
@@ -599,8 +628,15 @@
         Math.abs(v.saturation - 1) < 0.005 &&
         Math.abs(v.persp_vertical) < 0.05 &&
         Math.abs(v.persp_horizontal) < 0.05 &&
-        !v.regions.length
+        Math.abs(v.rotate_deg) < 0.05 &&
+        !v.regions.length &&
+        !v.crop
       );
+    }
+
+    function encodeCropParam(crop) {
+      if (!crop) return "";
+      return `${crop.x.toFixed(5)},${crop.y.toFixed(5)},${crop.w.toFixed(5)},${crop.h.toFixed(5)}`;
     }
 
     function pixelStrengthLabel(s) {
@@ -623,6 +659,7 @@
       $("valSaturation").textContent = v.saturation.toFixed(2);
       $("valPerspVert").textContent = String(Math.round(v.persp_vertical));
       $("valPerspHoriz").textContent = String(Math.round(v.persp_horizontal));
+      $("valRotateDeg").textContent = v.rotate_deg.toFixed(1);
       $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
@@ -630,23 +667,58 @@
       $("pixelRegionHint").textContent = n
         ? `${n} Bereich(e) markiert — Vorschau zeigt die Verpixelung.`
         : "Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.";
+      $("cropRegionHint").textContent = v.crop
+        ? `Zuschnitt markiert (${Math.round(v.crop.w * 100)}×${Math.round(v.crop.h * 100)} % der Fläche).`
+        : "Rechteck auf der Vorschau markieren — alles außerhalb wird entfernt.";
+    }
+
+    function updateAdjustModeHint() {
+      if (adjustDrawMode === "pixel") {
+        $("adjustModeHint").textContent =
+          "Verpixeln: Rechteck aufziehen. Nochmal «Bereich markieren» zum Beenden. Mausrad = Zoom.";
+      } else if (adjustDrawMode === "crop") {
+        $("adjustModeHint").textContent =
+          "Zuschneiden: Rechteck aufziehen. Nochmal «Zuschnitt markieren» zum Beenden. Mausrad = Zoom.";
+      } else {
+        $("adjustModeHint").textContent =
+          "Mausrad zoomen. Perspektive/Grad in den Reglern — Zuschnitt oder Verpixeln per Markieren-Button.";
+      }
+    }
+
+    function setAdjustDrawMode(mode) {
+      adjustDrawMode = mode === "pixel" || mode === "crop" ? mode : null;
+      $("btnPixelMode").classList.toggle("active", adjustDrawMode === "pixel");
+      $("btnPixelMode").textContent = adjustDrawMode === "pixel" ? "Verpixeln aktiv" : "Bereich markieren";
+      $("btnCropMode").classList.toggle("active", adjustDrawMode === "crop");
+      $("btnCropMode").textContent = adjustDrawMode === "crop" ? "Zuschnitt aktiv" : "Zuschnitt markieren";
+      $("adjustViewport").classList.toggle("is-selecting", !!adjustDrawMode);
+      updateAdjustModeHint();
     }
 
     function setPixelateMode(on) {
-      pixelateState.mode = !!on;
-      $("btnPixelMode").classList.toggle("active", pixelateState.mode);
-      $("btnPixelMode").textContent = pixelateState.mode ? "Markieren aktiv" : "Bereich markieren";
-      $("adjustViewport").classList.toggle("is-selecting", pixelateState.mode);
-      $("adjustModeHint").textContent = pixelateState.mode
-        ? "Markieren aktiv: Rechteck aufziehen. Nochmal klicken zum Beenden. Zoom weiter per Mausrad."
-        : "Mausrad zoomen. Für Verpixelung: «Bereich markieren», Rechteck aufziehen.";
+      setAdjustDrawMode(on ? "pixel" : null);
+    }
+
+    function setCropMode(on) {
+      setAdjustDrawMode(on ? "crop" : null);
     }
 
     function clearPixelRegions({ refresh = true } = {}) {
       pixelateState.regions = [];
       pixelateState.draft = null;
       pixelateState.drawing = false;
-      renderPixelOverlay();
+      renderAdjustOverlay();
+      if (refresh) {
+        updateAdjustPreview();
+        updateButtons();
+      }
+    }
+
+    function clearCropRegion({ refresh = true } = {}) {
+      cropState.region = null;
+      cropState.draft = null;
+      cropState.drawing = false;
+      renderAdjustOverlay();
       if (refresh) {
         updateAdjustPreview();
         updateButtons();
@@ -662,7 +734,7 @@
       if (Math.abs(parseFloat($("adjZoom").value) - zoomState.scale) > 0.001) {
         $("adjZoom").value = String(zoomState.scale);
       }
-      renderPixelOverlay();
+      renderAdjustOverlay();
     }
 
     function clampZoomPan() {
@@ -731,7 +803,7 @@
       return { x, y, w, h };
     }
 
-    function renderPixelOverlay() {
+    function renderAdjustOverlay() {
       const overlay = $("adjustOverlay");
       const vp = $("adjustViewport");
       const img = $("adjustPreview");
@@ -742,18 +814,26 @@
 
       const left = imgRect.left - vpRect.left;
       const top = imgRect.top - vpRect.top;
-      const all = [...pixelateState.regions];
-      if (pixelateState.draft) all.push({ ...pixelateState.draft, _draft: true });
 
-      for (const r of all) {
-        if (r.w < 0.002 || r.h < 0.002) continue;
+      const drawRect = (r, cls) => {
+        if (r.w < 0.002 || r.h < 0.002) return;
         const el = document.createElement("div");
-        el.className = "adjust-region" + (r._draft ? " is-draft" : "");
+        el.className = cls + (r._draft ? " is-draft" : "");
         el.style.left = `${left + r.x * imgRect.width}px`;
         el.style.top = `${top + r.y * imgRect.height}px`;
         el.style.width = `${r.w * imgRect.width}px`;
         el.style.height = `${r.h * imgRect.height}px`;
         overlay.appendChild(el);
+      };
+
+      const pix = [...pixelateState.regions];
+      if (pixelateState.draft) pix.push({ ...pixelateState.draft, _draft: true });
+      for (const r of pix) drawRect(r, "adjust-region");
+
+      if (cropState.draft) {
+        drawRect({ ...cropState.draft, _draft: true }, "adjust-region is-crop");
+      } else if (cropState.region) {
+        drawRect({ ...cropState.region, _draft: false }, "adjust-region is-crop");
       }
     }
 
@@ -763,9 +843,11 @@
       $("adjSaturation").value = "1";
       $("adjPerspVert").value = "0";
       $("adjPerspHoriz").value = "0";
+      $("adjRotateDeg").value = "0";
       $("adjPixel").value = "0.045";
-      setPixelateMode(false);
+      setAdjustDrawMode(null);
       clearPixelRegions({ refresh: false });
+      clearCropRegion({ refresh: false });
       syncAdjustLabels();
       updateAdjustPreview();
       updateButtons();
@@ -779,16 +861,18 @@
         $("adjustPreview").removeAttribute("src");
         $("btnAdjApply").disabled = true;
         zoomState.path = null;
-        setPixelateMode(false);
+        setAdjustDrawMode(null);
         clearPixelRegions({ refresh: false });
+        clearCropRegion({ refresh: false });
         resetZoomView();
-        renderPixelOverlay();
+        renderAdjustOverlay();
         return;
       }
       if (zoomState.path !== f.path) {
         zoomState.path = f.path;
-        setPixelateMode(false);
+        setAdjustDrawMode(null);
         clearPixelRegions({ refresh: false });
+        clearCropRegion({ refresh: false });
         resetZoomView();
       }
       $("adjustTarget").textContent = `Aktiv: ${f.name}`;
@@ -826,8 +910,10 @@
           pixel_strength: String(v.pixel_strength),
           persp_vertical: String(v.persp_vertical),
           persp_horizontal: String(v.persp_horizontal),
+          rotate_deg: String(v.rotate_deg),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
+        if (v.crop) q.set("crop", encodeCropParam(v.crop));
         try {
           const res = await fetch(`/api/adjust-size?${q.toString()}`, {
             signal: adjustSizeAbort.signal,
@@ -870,14 +956,16 @@
           pixel_strength: String(v.pixel_strength),
           persp_vertical: String(v.persp_vertical),
           persp_horizontal: String(v.persp_horizontal),
+          rotate_deg: String(v.rotate_deg),
           t: String(state.cacheBust),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
+        if (v.crop) q.set("crop", encodeCropParam(v.crop));
         const img = $("adjustPreview");
-        img.onload = () => renderPixelOverlay();
+        img.onload = () => renderAdjustOverlay();
         img.src = `/api/adjust-preview?${q.toString()}`;
       }, 120);
-      renderPixelOverlay();
+      renderAdjustOverlay();
       updateAdjustSizeEstimate();
       updateButtons();
     }
@@ -894,22 +982,23 @@
         { passive: false }
       );
       vp.addEventListener("dblclick", (e) => {
-        if (pixelateState.mode) return;
+        if (adjustDrawMode) return;
         e.preventDefault();
         if (zoomState.scale > 1.05) resetZoomView();
         else setZoomAt(2.5, e.clientX, e.clientY);
       });
       vp.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
-        if (pixelateState.mode) {
+        if (adjustDrawMode === "pixel" || adjustDrawMode === "crop") {
           const p = clientToNorm(e.clientX, e.clientY);
           if (!p) return;
-          pixelateState.drawing = true;
-          pixelateState.startX = p.x;
-          pixelateState.startY = p.y;
-          pixelateState.draft = { x: p.x, y: p.y, w: 0, h: 0 };
+          const st = adjustDrawMode === "crop" ? cropState : pixelateState;
+          st.drawing = true;
+          st.startX = p.x;
+          st.startY = p.y;
+          st.draft = { x: p.x, y: p.y, w: 0, h: 0 };
           vp.setPointerCapture(e.pointerId);
-          renderPixelOverlay();
+          renderAdjustOverlay();
           return;
         }
         if (zoomState.scale <= 1.01) return;
@@ -920,14 +1009,12 @@
         vp.setPointerCapture(e.pointerId);
       });
       vp.addEventListener("pointermove", (e) => {
-        if (pixelateState.drawing) {
+        if (pixelateState.drawing || cropState.drawing) {
           const p = clientToNorm(e.clientX, e.clientY);
           if (!p) return;
-          pixelateState.draft = normRectFromPoints(
-            { x: pixelateState.startX, y: pixelateState.startY },
-            p
-          );
-          renderPixelOverlay();
+          const st = cropState.drawing ? cropState : pixelateState;
+          st.draft = normRectFromPoints({ x: st.startX, y: st.startY }, p);
+          renderAdjustOverlay();
           return;
         }
         if (!zoomState.dragging) return;
@@ -939,18 +1026,21 @@
         applyZoomTransform();
       });
       const endPointer = (e) => {
-        if (pixelateState.drawing) {
-          pixelateState.drawing = false;
-          const draft = pixelateState.draft;
-          pixelateState.draft = null;
+        if (pixelateState.drawing || cropState.drawing) {
+          const isCrop = cropState.drawing;
+          const st = isCrop ? cropState : pixelateState;
+          st.drawing = false;
+          const draft = st.draft;
+          st.draft = null;
           try {
             vp.releasePointerCapture(e.pointerId);
           } catch (_) {}
           if (draft && draft.w >= 0.01 && draft.h >= 0.01) {
-            pixelateState.regions.push(draft);
+            if (isCrop) cropState.region = draft;
+            else pixelateState.regions.push(draft);
             updateAdjustPreview();
           } else {
-            renderPixelOverlay();
+            renderAdjustOverlay();
             updateButtons();
           }
           return;
@@ -972,7 +1062,7 @@
       $("btnAdjZoomReset").addEventListener("click", resetZoomView);
       $("btnAdjPrev").addEventListener("click", () => stepAdjustFile(-1));
       $("btnAdjNext").addEventListener("click", () => stepAdjustFile(1));
-      window.addEventListener("resize", renderPixelOverlay);
+      window.addEventListener("resize", renderAdjustOverlay);
       applyZoomTransform();
     })();
 
@@ -1233,11 +1323,17 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation", "adjPerspVert", "adjPerspHoriz", "adjPixel"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjPerspVert", "adjPerspHoriz", "adjRotateDeg", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
-    $("btnPixelMode").addEventListener("click", () => setPixelateMode(!pixelateState.mode));
+    $("btnPixelMode").addEventListener("click", () => {
+      setAdjustDrawMode(adjustDrawMode === "pixel" ? null : "pixel");
+    });
+    $("btnCropMode").addEventListener("click", () => {
+      setAdjustDrawMode(adjustDrawMode === "crop" ? null : "crop");
+    });
     $("btnPixelClear").addEventListener("click", () => clearPixelRegions());
+    $("btnCropClear").addEventListener("click", () => clearCropRegion());
     $("btnAdjReset").addEventListener("click", resetAdjustSliders);
     $("btnAdjApply").addEventListener("click", async () => {
       if (!state.active || state.root !== "photos") return;
@@ -1262,6 +1358,8 @@
             pixel_strength: v.pixel_strength,
             persp_vertical: v.persp_vertical,
             persp_horizontal: v.persp_horizontal,
+            rotate_deg: v.rotate_deg,
+            crop: v.crop,
             regions: v.regions,
           }),
         });
@@ -1283,6 +1381,8 @@
         if (Math.abs(v.persp_vertical) > 0.05 || Math.abs(v.persp_horizontal) > 0.05) {
           bits.push("Perspektive");
         }
+        if (Math.abs(v.rotate_deg) > 0.05) bits.push("Gerade");
+        if (v.crop) bits.push("Zuschnitt");
         resetAdjustSliders();
         await load(state.path, {
           preserveSelection: true,
