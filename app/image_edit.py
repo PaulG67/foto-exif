@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -95,27 +96,97 @@ def encode_regions(regions: list[tuple[float, float, float, float]]) -> str:
     return ";".join(f"{x:.5f},{y:.5f},{w:.5f},{h:.5f}" for x, y, w, h in regions)
 
 
-def _clamp_perspective(value: float) -> float:
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(-30.0, min(30.0, v))
+# Normalized corners: top-left, top-right, bottom-right, bottom-left
+DEFAULT_SCAN_QUAD: tuple[tuple[float, float], ...] = (
+    (0.0, 0.0),
+    (1.0, 0.0),
+    (1.0, 1.0),
+    (0.0, 1.0),
+)
 
 
-def _clamp_rotation(value: float) -> float:
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(-15.0, min(15.0, v))
-
-
-def parse_crop(raw: Any) -> tuple[float, float, float, float] | None:
-    regions = parse_regions(raw)
-    if not regions:
+def parse_scan_quad(raw: Any) -> list[tuple[float, float]] | None:
+    """Parse four corners (0..1). Order: TL, TR, BR, BL."""
+    if raw is None or raw == "":
         return None
-    return regions[0]
+    data = raw
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.startswith("["):
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+        else:
+            parts = [p.strip() for p in text.split(";") if p.strip()]
+            data = []
+            for part in parts:
+                nums = [p.strip() for p in part.split(",")]
+                if len(nums) >= 2:
+                    data.append([nums[0], nums[1]])
+
+    if not isinstance(data, list) or len(data) < 4:
+        return None
+
+    out: list[tuple[float, float]] = []
+    for item in data[:4]:
+        try:
+            if isinstance(item, dict):
+                x = float(item.get("x", 0))
+                y = float(item.get("y", 0))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                x, y = float(item[0]), float(item[1])
+            else:
+                return None
+        except (TypeError, ValueError):
+            return None
+        out.append((max(0.0, min(1.0, x)), max(0.0, min(1.0, y))))
+    return out
+
+
+def encode_scan_quad(corners: list[tuple[float, float]]) -> str:
+    return ";".join(f"{x:.5f},{y:.5f}" for x, y in corners)
+
+
+def scan_quad_is_default(corners: list[tuple[float, float]] | None) -> bool:
+    if not corners or len(corners) != 4:
+        return True
+    for (x, y), (dx, dy) in zip(corners, DEFAULT_SCAN_QUAD):
+        if abs(x - dx) > 0.008 or abs(y - dy) > 0.008:
+            return False
+    return True
+
+
+def apply_document_scan(
+    im: Image.Image, corners: list[tuple[float, float]] | None
+) -> Image.Image:
+    """Perspective-correct quadrilateral to axis-aligned rectangle (scan apps)."""
+    if not corners or len(corners) != 4 or scan_quad_is_default(corners):
+        return im
+    w, h = im.size
+    if w < 8 or h < 8:
+        return im
+
+    tl, tr, br, bl = corners
+    pts = (
+        (tl[0] * w, tl[1] * h),
+        (tr[0] * w, tr[1] * h),
+        (br[0] * w, br[1] * h),
+        (bl[0] * w, bl[1] * h),
+    )
+
+    def dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    out_w = int(round(max(dist(pts[0], pts[1]), dist(pts[3], pts[2]))))
+    out_h = int(round(max(dist(pts[0], pts[3]), dist(pts[1], pts[2]))))
+    out_w = max(32, min(out_w, w * 3))
+    out_h = max(32, min(out_h, h * 3))
+
+    quad = (pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1], pts[3][0], pts[3][1])
+    return im.transform((out_w, out_h), Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
 
 
 def _is_neutral(
@@ -124,113 +195,17 @@ def _is_neutral(
     saturation: float,
     regions: list[tuple[float, float, float, float]] | None = None,
     *,
-    persp_vertical: float = 0.0,
-    persp_horizontal: float = 0.0,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
 ) -> bool:
     if regions:
         return False
-    if crop:
+    if scan_quad and not scan_quad_is_default(scan_quad):
         return False
     return (
         abs(brightness - 1.0) < 0.001
         and abs(contrast - 1.0) < 0.001
         and abs(saturation - 1.0) < 0.001
-        and abs(_clamp_perspective(persp_vertical)) < 0.05
-        and abs(_clamp_perspective(persp_horizontal)) < 0.05
-        and abs(_clamp_rotation(rotate_deg)) < 0.05
     )
-
-
-def _quad_warp(im: Image.Image, quad: tuple[float, ...]) -> Image.Image:
-    """QUAD: source ul, ur, lr, ll → output rectangle (same size)."""
-    w, h = im.size
-    mx, my = w * 0.38, h * 0.38
-
-    def clx(x: float) -> float:
-        return max(-mx, min(w + mx, x))
-
-    def cly(y: float) -> float:
-        return max(-my, min(h + my, y))
-
-    x0, y0, x1, y1, x2, y2, x3, y3 = quad
-    q = (
-        clx(x0),
-        cly(y0),
-        clx(x1),
-        cly(y1),
-        clx(x2),
-        cly(y2),
-        clx(x3),
-        cly(y3),
-    )
-    return im.transform((w, h), Image.Transform.QUAD, q, Image.Resampling.BICUBIC)
-
-
-def apply_perspective(
-    im: Image.Image,
-    *,
-    vertical: float = 0.0,
-    horizontal: float = 0.0,
-) -> Image.Image:
-    """
-    Trapez-Korrektur (kein 90°-Drehen), zwei unabhängige Schritte:
-    vertical (+): obere Kante nach hinten (Oben verengt)
-    horizontal (+): rechts nach hinten / links nach vorne (linke Kante unten korrigieren)
-    """
-    vertical = _clamp_perspective(vertical)
-    horizontal = _clamp_perspective(horizontal)
-    if abs(vertical) < 0.05 and abs(horizontal) < 0.05:
-        return im
-    w, h = im.size
-    if w < 8 or h < 8:
-        return im
-
-    if abs(vertical) >= 0.05:
-        # Symmetrisch obere Kante ein-/ausziehen
-        s = (vertical / 100.0) * w * 0.34
-        im = _quad_warp(im, (s, 0.0, w - s, 0.0, w, h, 0.0, h))
-
-    if abs(horizontal) >= 0.05:
-        # Linke Kante: unten nach rechts (+) oder links (−) — simuliert links vor / rechts hinten
-        s = (horizontal / 100.0) * w * 0.34
-        im = _quad_warp(im, (0.0, 0.0, w, 0.0, w, h, s, h))
-
-    return im
-
-
-def apply_fine_rotation(im: Image.Image, degrees: float) -> Image.Image:
-    """Horizont gerade ziehen — wenige Grad, mit weißem Rand."""
-    degrees = _clamp_rotation(degrees)
-    if abs(degrees) < 0.05:
-        return im
-    return im.rotate(
-        -degrees,
-        resample=Image.Resampling.BICUBIC,
-        expand=True,
-        fillcolor=(255, 255, 255),
-    )
-
-
-def apply_crop_norm(
-    im: Image.Image, crop: tuple[float, float, float, float] | None
-) -> Image.Image:
-    if not crop:
-        return im
-    nx, ny, nw, nh = crop
-    w, h = im.size
-    x0 = int(round(nx * w))
-    y0 = int(round(ny * h))
-    x1 = int(round((nx + nw) * w))
-    y1 = int(round((ny + nh) * h))
-    x0 = max(0, min(w - 1, x0))
-    y0 = max(0, min(h - 1, y0))
-    x1 = max(x0 + 1, min(w, x1))
-    y1 = max(y0 + 1, min(h, y1))
-    if x1 - x0 < 2 or y1 - y0 < 2:
-        return im
-    return im.crop((x0, y0, x1, y1))
 
 
 def pixelate_regions(
@@ -290,14 +265,9 @@ def _process_adjusted_rgb(
     saturation: float,
     regions: list[tuple[float, float, float, float]],
     pixel_strength: float,
-    persp_vertical: float,
-    persp_horizontal: float,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
 ) -> Image.Image:
-    im = apply_perspective(im, vertical=persp_vertical, horizontal=persp_horizontal)
-    im = apply_fine_rotation(im, rotate_deg)
-    im = apply_crop_norm(im, crop)
+    im = apply_document_scan(im, scan_quad)
     im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
     pixelate_regions(im, regions, pixel_strength)
     return im
@@ -311,10 +281,7 @@ def render_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
-    persp_vertical: float = 0.0,
-    persp_horizontal: float = 0.0,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
     quality: int = 90,
     max_side: int | None = None,
 ) -> bytes:
@@ -323,9 +290,6 @@ def render_adjusted_jpeg(
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
     regions = regions or []
-    persp_vertical = _clamp_perspective(persp_vertical)
-    persp_horizontal = _clamp_perspective(persp_horizontal)
-    rotate_deg = _clamp_rotation(rotate_deg)
     quality = max(60, min(98, int(quality)))
 
     with Image.open(path) as im:
@@ -340,10 +304,7 @@ def render_adjusted_jpeg(
             saturation=saturation,
             regions=regions,
             pixel_strength=pixel_strength,
-            persp_vertical=persp_vertical,
-            persp_horizontal=persp_horizontal,
-            rotate_deg=rotate_deg,
-            crop=crop,
+            scan_quad=scan_quad,
         )
         buf = BytesIO()
         im.save(buf, format="JPEG", quality=quality, optimize=True)
@@ -358,10 +319,7 @@ def build_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
-    persp_vertical: float = 0.0,
-    persp_horizontal: float = 0.0,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> bytes | None:
     """
@@ -372,18 +330,12 @@ def build_adjusted_jpeg(
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
     regions = regions or []
-    persp_vertical = _clamp_perspective(persp_vertical)
-    persp_horizontal = _clamp_perspective(persp_horizontal)
-    rotate_deg = _clamp_rotation(rotate_deg)
     if _is_neutral(
         brightness,
         contrast,
         saturation,
         regions,
-        persp_vertical=persp_vertical,
-        persp_horizontal=persp_horizontal,
-        rotate_deg=rotate_deg,
-        crop=crop,
+        scan_quad=scan_quad,
     ):
         return None
 
@@ -415,10 +367,7 @@ def build_adjusted_jpeg(
             saturation=saturation,
             regions=regions,
             pixel_strength=pixel_strength,
-            persp_vertical=persp_vertical,
-            persp_horizontal=persp_horizontal,
-            rotate_deg=rotate_deg,
-            crop=crop,
+            scan_quad=scan_quad,
         )
         buf = BytesIO()
         save_kw: dict = {"format": "JPEG", "quality": quality, "optimize": True}
@@ -442,10 +391,7 @@ def estimate_adjusted_size(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
-    persp_vertical: float = 0.0,
-    persp_horizontal: float = 0.0,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> int:
     """Byte size after apply (or current size if adjustments are neutral)."""
@@ -456,10 +402,7 @@ def estimate_adjusted_size(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
-        persp_vertical=persp_vertical,
-        persp_horizontal=persp_horizontal,
-        rotate_deg=rotate_deg,
-        crop=crop,
+        scan_quad=scan_quad,
         quality=quality,
     )
     if out is None:
@@ -475,10 +418,7 @@ def apply_image_adjustments(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
-    persp_vertical: float = 0.0,
-    persp_horizontal: float = 0.0,
-    rotate_deg: float = 0.0,
-    crop: tuple[float, float, float, float] | None = None,
+    scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> None:
     """
@@ -493,10 +433,7 @@ def apply_image_adjustments(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
-        persp_vertical=persp_vertical,
-        persp_horizontal=persp_horizontal,
-        rotate_deg=rotate_deg,
-        crop=crop,
+        scan_quad=scan_quad,
         quality=quality,
     )
     if out is None:

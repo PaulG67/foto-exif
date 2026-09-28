@@ -214,14 +214,28 @@
       border-style: dashed;
       background: rgba(226, 75, 74, .18);
     }
-    .adjust-region.is-crop {
-      border-color: #16794c;
-      background: rgba(22, 121, 76, .12);
+    .adjust-scan-svg {
+      position: absolute; overflow: visible; pointer-events: none;
     }
-    .adjust-region.is-crop.is-draft {
-      background: rgba(22, 121, 76, .2);
+    .adjust-scan-svg polygon {
+      fill: rgba(22, 121, 76, .14);
+      stroke: #16794c;
+      stroke-width: 2;
     }
-    .adjust-persp-box,
+    .adjust-scan-handle {
+      position: absolute;
+      width: 16px; height: 16px; margin: -8px 0 0 -8px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      background: #16794c;
+      box-shadow: 0 1px 4px rgba(0,0,0,.35);
+      pointer-events: auto;
+      cursor: grab;
+      z-index: 3;
+    }
+    .adjust-scan-handle:active { cursor: grabbing; }
+    .adjust-preview-wrap.is-scanning { cursor: default; }
+    .adjust-scan-box,
     .adjust-pixel-box {
       display: grid; gap: .55rem;
       padding: .7rem .8rem;
@@ -441,28 +455,12 @@
             <label>Sättigung <span id="valSaturation">1.00</span></label>
             <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
           </div>
-          <div class="adjust-persp-box">
-            <p class="group-title">Perspektive &amp; Gerade</p>
-            <p class="group-hint">Kein 90°-Drehen — <strong>Trapez begradigen</strong>. Oben: Kamera zu hoch/tief. Mitte: von der Seite. Unten: Horizont gerade (°).</p>
-            <div class="slider-row">
-              <label>Oben hinten (+) / vorne (−) <span id="valPerspVert">0</span></label>
-              <input type="range" id="adjPerspVert" min="-30" max="30" step="1" value="0" />
-            </div>
-            <div class="slider-row">
-              <label>Rechts hinten (+) / links vorne (−) <span id="valPerspHoriz">0</span></label>
-              <input type="range" id="adjPerspHoriz" min="-30" max="30" step="1" value="0" />
-            </div>
-            <div class="slider-row">
-              <label>Gerade ausrichten (°) <span id="valRotateDeg">0.0</span></label>
-              <input type="range" id="adjRotateDeg" min="-15" max="15" step="0.1" value="0" />
-            </div>
-          </div>
-          <div class="adjust-persp-box">
-            <p class="group-title">Zuschneiden</p>
-            <p class="group-hint" id="cropRegionHint">Rechteck auf der Vorschau markieren — alles außerhalb wird entfernt.</p>
+          <div class="adjust-scan-box">
+            <p class="group-title">Dokument scannen</p>
+            <p class="group-hint" id="scanRegionHint">Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.</p>
             <div class="adjust-pixel-actions">
-              <button type="button" id="btnCropMode">Zuschnitt markieren</button>
-              <button type="button" id="btnCropClear" disabled>Zuschnitt löschen</button>
+              <button type="button" id="btnScanMode">Ecken verschieben</button>
+              <button type="button" id="btnScanReset" disabled>Ecken zurücksetzen</button>
             </div>
           </div>
           <div class="adjust-pixel-box">
@@ -546,7 +544,7 @@
         !adjustIsNeutral();
       $("btnAdjApply").disabled = !canAdj;
       $("btnPixelClear").disabled = !pixelateState.regions.length;
-      $("btnCropClear").disabled = !cropState.region;
+      $("btnScanReset").disabled = scanCornersDefault(scanState.corners);
       updateAdjustNav();
     }
 
@@ -598,13 +596,26 @@
       startX: 0,
       startY: 0,
     };
-    const cropState = {
-      region: null,
-      draft: null,
-      drawing: false,
-      startX: 0,
-      startY: 0,
+    const DEFAULT_SCAN_CORNERS = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 1, y: 1 },
+      { x: 0, y: 1 },
+    ];
+    const scanState = {
+      corners: DEFAULT_SCAN_CORNERS.map((c) => ({ ...c })),
+      dragIndex: -1,
+      previewTimer: null,
     };
+
+    function scanCornersDefault(corners) {
+      for (let i = 0; i < 4; i++) {
+        const d = DEFAULT_SCAN_CORNERS[i];
+        const c = corners[i];
+        if (Math.abs(c.x - d.x) > 0.008 || Math.abs(c.y - d.y) > 0.008) return false;
+      }
+      return true;
+    }
 
     function adjustValues() {
       return {
@@ -612,11 +623,8 @@
         contrast: parseFloat($("adjContrast").value) || 1,
         saturation: parseFloat($("adjSaturation").value) || 1,
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
-        persp_vertical: parseFloat($("adjPerspVert").value) || 0,
-        persp_horizontal: parseFloat($("adjPerspHoriz").value) || 0,
-        rotate_deg: parseFloat($("adjRotateDeg").value) || 0,
         regions: pixelateState.regions.map((r) => ({ ...r })),
-        crop: cropState.region ? { ...cropState.region } : null,
+        scan_quad: scanState.corners.map((c) => ({ ...c })),
       };
     }
 
@@ -626,17 +634,13 @@
         Math.abs(v.brightness - 1) < 0.005 &&
         Math.abs(v.contrast - 1) < 0.005 &&
         Math.abs(v.saturation - 1) < 0.005 &&
-        Math.abs(v.persp_vertical) < 0.05 &&
-        Math.abs(v.persp_horizontal) < 0.05 &&
-        Math.abs(v.rotate_deg) < 0.05 &&
         !v.regions.length &&
-        !v.crop
+        scanCornersDefault(v.scan_quad)
       );
     }
 
-    function encodeCropParam(crop) {
-      if (!crop) return "";
-      return `${crop.x.toFixed(5)},${crop.y.toFixed(5)},${crop.w.toFixed(5)},${crop.h.toFixed(5)}`;
+    function encodeScanQuad(corners) {
+      return corners.map((c) => `${c.x.toFixed(5)},${c.y.toFixed(5)}`).join(";");
     }
 
     function pixelStrengthLabel(s) {
@@ -657,9 +661,6 @@
       $("valBrightness").textContent = v.brightness.toFixed(2);
       $("valContrast").textContent = v.contrast.toFixed(2);
       $("valSaturation").textContent = v.saturation.toFixed(2);
-      $("valPerspVert").textContent = String(Math.round(v.persp_vertical));
-      $("valPerspHoriz").textContent = String(Math.round(v.persp_horizontal));
-      $("valRotateDeg").textContent = v.rotate_deg.toFixed(1);
       $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
@@ -667,40 +668,43 @@
       $("pixelRegionHint").textContent = n
         ? `${n} Bereich(e) markiert — Vorschau zeigt die Verpixelung.`
         : "Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.";
-      $("cropRegionHint").textContent = v.crop
-        ? `Zuschnitt markiert (${Math.round(v.crop.w * 100)}×${Math.round(v.crop.h * 100)} % der Fläche).`
-        : "Rechteck auf der Vorschau markieren — alles außerhalb wird entfernt.";
+      const scanActive = !scanCornersDefault(v.scan_quad);
+      $("scanRegionHint").textContent = scanActive
+        ? "Ecken gesetzt — Vorschau zeigt den entzerrten Zuschnitt. «Auf Datei anwenden» speichert dauerhaft."
+        : "Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.";
     }
 
     function updateAdjustModeHint() {
       if (adjustDrawMode === "pixel") {
         $("adjustModeHint").textContent =
           "Verpixeln: Rechteck aufziehen. Nochmal «Bereich markieren» zum Beenden. Mausrad = Zoom.";
-      } else if (adjustDrawMode === "crop") {
+      } else if (adjustDrawMode === "scan") {
         $("adjustModeHint").textContent =
-          "Zuschneiden: Rechteck aufziehen. Nochmal «Zuschnitt markieren» zum Beenden. Mausrad = Zoom.";
+          "Scan: die vier grünen Punkte ziehen (Ecken des Dokuments). Nochmal «Ecken verschieben» zum Beenden. Mausrad = Zoom.";
       } else {
         $("adjustModeHint").textContent =
-          "Mausrad zoomen. Perspektive/Grad in den Reglern — Zuschnitt oder Verpixeln per Markieren-Button.";
+          "Mausrad zoomen. «Ecken verschieben» für Dokument-Scan, «Bereich markieren» für Verpixelung.";
       }
     }
 
     function setAdjustDrawMode(mode) {
-      adjustDrawMode = mode === "pixel" || mode === "crop" ? mode : null;
+      adjustDrawMode = mode === "pixel" || mode === "scan" ? mode : null;
       $("btnPixelMode").classList.toggle("active", adjustDrawMode === "pixel");
       $("btnPixelMode").textContent = adjustDrawMode === "pixel" ? "Verpixeln aktiv" : "Bereich markieren";
-      $("btnCropMode").classList.toggle("active", adjustDrawMode === "crop");
-      $("btnCropMode").textContent = adjustDrawMode === "crop" ? "Zuschnitt aktiv" : "Zuschnitt markieren";
-      $("adjustViewport").classList.toggle("is-selecting", !!adjustDrawMode);
+      $("btnScanMode").classList.toggle("active", adjustDrawMode === "scan");
+      $("btnScanMode").textContent = adjustDrawMode === "scan" ? "Ecken aktiv" : "Ecken verschieben";
+      $("adjustViewport").classList.toggle("is-selecting", adjustDrawMode === "pixel");
+      $("adjustViewport").classList.toggle("is-scanning", adjustDrawMode === "scan");
       updateAdjustModeHint();
+      renderAdjustOverlay();
     }
 
     function setPixelateMode(on) {
       setAdjustDrawMode(on ? "pixel" : null);
     }
 
-    function setCropMode(on) {
-      setAdjustDrawMode(on ? "crop" : null);
+    function setScanMode(on) {
+      setAdjustDrawMode(on ? "scan" : null);
     }
 
     function clearPixelRegions({ refresh = true } = {}) {
@@ -714,10 +718,9 @@
       }
     }
 
-    function clearCropRegion({ refresh = true } = {}) {
-      cropState.region = null;
-      cropState.draft = null;
-      cropState.drawing = false;
+    function resetScanCorners({ refresh = true } = {}) {
+      scanState.corners = DEFAULT_SCAN_CORNERS.map((c) => ({ ...c }));
+      scanState.dragIndex = -1;
       renderAdjustOverlay();
       if (refresh) {
         updateAdjustPreview();
@@ -830,10 +833,36 @@
       if (pixelateState.draft) pix.push({ ...pixelateState.draft, _draft: true });
       for (const r of pix) drawRect(r, "adjust-region");
 
-      if (cropState.draft) {
-        drawRect({ ...cropState.draft, _draft: true }, "adjust-region is-crop");
-      } else if (cropState.region) {
-        drawRect({ ...cropState.region, _draft: false }, "adjust-region is-crop");
+      const showScan = adjustDrawMode === "scan" || !scanCornersDefault(scanState.corners);
+      if (showScan) {
+        const pts = scanState.corners.map((c) => ({
+          px: left + c.x * imgRect.width,
+          py: top + c.y * imgRect.height,
+        }));
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "adjust-scan-svg");
+        svg.style.left = `${left}px`;
+        svg.style.top = `${top}px`;
+        svg.style.width = `${imgRect.width}px`;
+        svg.style.height = `${imgRect.height}px`;
+        const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+        poly.setAttribute(
+          "points",
+          pts.map((p) => `${p.px - left},${p.py - top}`).join(" ")
+        );
+        svg.appendChild(poly);
+        overlay.appendChild(svg);
+        if (adjustDrawMode === "scan") {
+          scanState.corners.forEach((c, i) => {
+            const h = document.createElement("div");
+            h.className = "adjust-scan-handle";
+            h.dataset.scanCorner = String(i);
+            h.style.left = `${left + c.x * imgRect.width}px`;
+            h.style.top = `${top + c.y * imgRect.height}px`;
+            h.title = ["Oben links", "Oben rechts", "Unten rechts", "Unten links"][i];
+            overlay.appendChild(h);
+          });
+        }
       }
     }
 
@@ -841,13 +870,10 @@
       $("adjBrightness").value = "1";
       $("adjContrast").value = "1";
       $("adjSaturation").value = "1";
-      $("adjPerspVert").value = "0";
-      $("adjPerspHoriz").value = "0";
-      $("adjRotateDeg").value = "0";
       $("adjPixel").value = "0.045";
       setAdjustDrawMode(null);
       clearPixelRegions({ refresh: false });
-      clearCropRegion({ refresh: false });
+      resetScanCorners({ refresh: false });
       syncAdjustLabels();
       updateAdjustPreview();
       updateButtons();
@@ -863,7 +889,7 @@
         zoomState.path = null;
         setAdjustDrawMode(null);
         clearPixelRegions({ refresh: false });
-        clearCropRegion({ refresh: false });
+        resetScanCorners({ refresh: false });
         resetZoomView();
         renderAdjustOverlay();
         return;
@@ -872,7 +898,7 @@
         zoomState.path = f.path;
         setAdjustDrawMode(null);
         clearPixelRegions({ refresh: false });
-        clearCropRegion({ refresh: false });
+        resetScanCorners({ refresh: false });
         resetZoomView();
       }
       $("adjustTarget").textContent = `Aktiv: ${f.name}`;
@@ -908,12 +934,9 @@
           contrast: String(v.contrast),
           saturation: String(v.saturation),
           pixel_strength: String(v.pixel_strength),
-          persp_vertical: String(v.persp_vertical),
-          persp_horizontal: String(v.persp_horizontal),
-          rotate_deg: String(v.rotate_deg),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
-        if (v.crop) q.set("crop", encodeCropParam(v.crop));
+        if (!scanCornersDefault(v.scan_quad)) q.set("scan_quad", encodeScanQuad(v.scan_quad));
         try {
           const res = await fetch(`/api/adjust-size?${q.toString()}`, {
             signal: adjustSizeAbort.signal,
@@ -954,13 +977,10 @@
           contrast: String(v.contrast),
           saturation: String(v.saturation),
           pixel_strength: String(v.pixel_strength),
-          persp_vertical: String(v.persp_vertical),
-          persp_horizontal: String(v.persp_horizontal),
-          rotate_deg: String(v.rotate_deg),
           t: String(state.cacheBust),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
-        if (v.crop) q.set("crop", encodeCropParam(v.crop));
+        if (!scanCornersDefault(v.scan_quad)) q.set("scan_quad", encodeScanQuad(v.scan_quad));
         const img = $("adjustPreview");
         img.onload = () => renderAdjustOverlay();
         img.src = `/api/adjust-preview?${q.toString()}`;
@@ -989,14 +1009,23 @@
       });
       vp.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
-        if (adjustDrawMode === "pixel" || adjustDrawMode === "crop") {
+        if (adjustDrawMode === "scan") {
+          const t = e.target;
+          if (t && t.classList && t.classList.contains("adjust-scan-handle")) {
+            scanState.dragIndex = parseInt(t.dataset.scanCorner, 10);
+            if (Number.isNaN(scanState.dragIndex)) scanState.dragIndex = -1;
+            vp.setPointerCapture(e.pointerId);
+            e.preventDefault();
+            return;
+          }
+        }
+        if (adjustDrawMode === "pixel") {
           const p = clientToNorm(e.clientX, e.clientY);
           if (!p) return;
-          const st = adjustDrawMode === "crop" ? cropState : pixelateState;
-          st.drawing = true;
-          st.startX = p.x;
-          st.startY = p.y;
-          st.draft = { x: p.x, y: p.y, w: 0, h: 0 };
+          pixelateState.drawing = true;
+          pixelateState.startX = p.x;
+          pixelateState.startY = p.y;
+          pixelateState.draft = { x: p.x, y: p.y, w: 0, h: 0 };
           vp.setPointerCapture(e.pointerId);
           renderAdjustOverlay();
           return;
@@ -1009,11 +1038,22 @@
         vp.setPointerCapture(e.pointerId);
       });
       vp.addEventListener("pointermove", (e) => {
-        if (pixelateState.drawing || cropState.drawing) {
+        if (scanState.dragIndex >= 0) {
           const p = clientToNorm(e.clientX, e.clientY);
           if (!p) return;
-          const st = cropState.drawing ? cropState : pixelateState;
-          st.draft = normRectFromPoints({ x: st.startX, y: st.startY }, p);
+          scanState.corners[scanState.dragIndex] = { x: p.x, y: p.y };
+          renderAdjustOverlay();
+          clearTimeout(scanState.previewTimer);
+          scanState.previewTimer = setTimeout(updateAdjustPreview, 180);
+          return;
+        }
+        if (pixelateState.drawing) {
+          const p = clientToNorm(e.clientX, e.clientY);
+          if (!p) return;
+          pixelateState.draft = normRectFromPoints(
+            { x: pixelateState.startX, y: pixelateState.startY },
+            p
+          );
           renderAdjustOverlay();
           return;
         }
@@ -1026,18 +1066,23 @@
         applyZoomTransform();
       });
       const endPointer = (e) => {
-        if (pixelateState.drawing || cropState.drawing) {
-          const isCrop = cropState.drawing;
-          const st = isCrop ? cropState : pixelateState;
-          st.drawing = false;
-          const draft = st.draft;
-          st.draft = null;
+        if (scanState.dragIndex >= 0) {
+          scanState.dragIndex = -1;
+          try {
+            vp.releasePointerCapture(e.pointerId);
+          } catch (_) {}
+          updateAdjustPreview();
+          return;
+        }
+        if (pixelateState.drawing) {
+          pixelateState.drawing = false;
+          const draft = pixelateState.draft;
+          pixelateState.draft = null;
           try {
             vp.releasePointerCapture(e.pointerId);
           } catch (_) {}
           if (draft && draft.w >= 0.01 && draft.h >= 0.01) {
-            if (isCrop) cropState.region = draft;
-            else pixelateState.regions.push(draft);
+            pixelateState.regions.push(draft);
             updateAdjustPreview();
           } else {
             renderAdjustOverlay();
@@ -1323,17 +1368,17 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation", "adjPerspVert", "adjPerspHoriz", "adjRotateDeg", "adjPixel"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
     $("btnPixelMode").addEventListener("click", () => {
       setAdjustDrawMode(adjustDrawMode === "pixel" ? null : "pixel");
     });
-    $("btnCropMode").addEventListener("click", () => {
-      setAdjustDrawMode(adjustDrawMode === "crop" ? null : "crop");
+    $("btnScanMode").addEventListener("click", () => {
+      setAdjustDrawMode(adjustDrawMode === "scan" ? null : "scan");
     });
     $("btnPixelClear").addEventListener("click", () => clearPixelRegions());
-    $("btnCropClear").addEventListener("click", () => clearCropRegion());
+    $("btnScanReset").addEventListener("click", () => resetScanCorners());
     $("btnAdjReset").addEventListener("click", resetAdjustSliders);
     $("btnAdjApply").addEventListener("click", async () => {
       if (!state.active || state.root !== "photos") return;
@@ -1356,10 +1401,7 @@
             contrast: v.contrast,
             saturation: v.saturation,
             pixel_strength: v.pixel_strength,
-            persp_vertical: v.persp_vertical,
-            persp_horizontal: v.persp_horizontal,
-            rotate_deg: v.rotate_deg,
-            crop: v.crop,
+            scan_quad: scanCornersDefault(v.scan_quad) ? null : encodeScanQuad(v.scan_quad),
             regions: v.regions,
           }),
         });
@@ -1378,11 +1420,7 @@
           bits.push("Farbe");
         }
         if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
-        if (Math.abs(v.persp_vertical) > 0.05 || Math.abs(v.persp_horizontal) > 0.05) {
-          bits.push("Perspektive");
-        }
-        if (Math.abs(v.rotate_deg) > 0.05) bits.push("Gerade");
-        if (v.crop) bits.push("Zuschnitt");
+        if (!scanCornersDefault(v.scan_quad)) bits.push("Scan");
         resetAdjustSliders();
         await load(state.path, {
           preserveSelection: true,
