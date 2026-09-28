@@ -224,14 +224,24 @@
     }
     .adjust-scan-handle {
       position: absolute;
-      width: 16px; height: 16px; margin: -8px 0 0 -8px;
+      width: 32px; height: 32px; margin: -16px 0 0 -16px;
       border-radius: 50%;
-      border: 2px solid #fff;
+      border: 3px solid #fff;
       background: #16794c;
-      box-shadow: 0 1px 4px rgba(0,0,0,.35);
+      box-shadow: 0 2px 8px rgba(0,0,0,.4);
       pointer-events: auto;
       cursor: grab;
       z-index: 3;
+      box-sizing: border-box;
+    }
+    .adjust-scan-handle::after {
+      content: "";
+      position: absolute;
+      inset: 9px;
+      border-radius: 50%;
+      background: #fff;
+      opacity: .85;
+      pointer-events: none;
     }
     .adjust-scan-handle:active { cursor: grabbing; }
     .adjust-preview-wrap.is-scanning { cursor: default; }
@@ -460,6 +470,7 @@
             <p class="group-hint" id="scanRegionHint">Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.</p>
             <div class="adjust-pixel-actions">
               <button type="button" id="btnScanMode">Ecken verschieben</button>
+              <button type="button" class="primary" id="btnScanConfirm" disabled>Zuschnitt übernehmen</button>
               <button type="button" id="btnScanReset" disabled>Ecken zurücksetzen</button>
             </div>
           </div>
@@ -544,7 +555,11 @@
         !adjustIsNeutral();
       $("btnAdjApply").disabled = !canAdj;
       $("btnPixelClear").disabled = !pixelateState.regions.length;
-      $("btnScanReset").disabled = scanCornersDefault(scanState.corners);
+      $("btnScanReset").disabled =
+        scanCornersDefault(scanState.corners) &&
+        (!scanState.appliedQuad || scanCornersDefault(scanState.appliedQuad));
+      $("btnScanConfirm").disabled =
+        adjustDrawMode !== "scan" || scanCornersDefault(scanState.corners);
       updateAdjustNav();
     }
 
@@ -604,8 +619,8 @@
     ];
     const scanState = {
       corners: DEFAULT_SCAN_CORNERS.map((c) => ({ ...c })),
+      appliedQuad: null,
       dragIndex: -1,
-      previewTimer: null,
     };
 
     function scanCornersDefault(corners) {
@@ -617,14 +632,21 @@
       return true;
     }
 
+    function scanQuadForApi() {
+      if (adjustDrawMode === "scan") return null;
+      if (!scanState.appliedQuad || scanCornersDefault(scanState.appliedQuad)) return null;
+      return scanState.appliedQuad;
+    }
+
     function adjustValues() {
+      const applied = scanQuadForApi();
       return {
         brightness: parseFloat($("adjBrightness").value) || 1,
         contrast: parseFloat($("adjContrast").value) || 1,
         saturation: parseFloat($("adjSaturation").value) || 1,
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
         regions: pixelateState.regions.map((r) => ({ ...r })),
-        scan_quad: scanState.corners.map((c) => ({ ...c })),
+        scan_quad: applied ? applied.map((c) => ({ ...c })) : null,
       };
     }
 
@@ -635,7 +657,7 @@
         Math.abs(v.contrast - 1) < 0.005 &&
         Math.abs(v.saturation - 1) < 0.005 &&
         !v.regions.length &&
-        scanCornersDefault(v.scan_quad)
+        !v.scan_quad
       );
     }
 
@@ -668,10 +690,36 @@
       $("pixelRegionHint").textContent = n
         ? `${n} Bereich(e) markiert — Vorschau zeigt die Verpixelung.`
         : "Keine Bereiche — Gesicht/Schild etc. mit der Maus markieren.";
-      const scanActive = !scanCornersDefault(v.scan_quad);
-      $("scanRegionHint").textContent = scanActive
-        ? "Ecken gesetzt — Vorschau zeigt den entzerrten Zuschnitt. «Auf Datei anwenden» speichert dauerhaft."
-        : "Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.";
+      if (adjustDrawMode === "scan") {
+        $("scanRegionHint").textContent =
+          "Ecken am Originalbild setzen — die Vorschau bleibt unverändert, bis du «Zuschnitt übernehmen» klickst.";
+      } else if (v.scan_quad) {
+        $("scanRegionHint").textContent =
+          "Scan übernommen — Vorschau zeigt den entzerrten Zuschnitt. «Auf Datei anwenden» speichert dauerhaft.";
+      } else {
+        $("scanRegionHint").textContent =
+          "Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.";
+      }
+    }
+
+    function restoreScanDraftFromApplied() {
+      if (scanState.appliedQuad && !scanCornersDefault(scanState.appliedQuad)) {
+        scanState.corners = scanState.appliedQuad.map((c) => ({ ...c }));
+      } else {
+        scanState.corners = DEFAULT_SCAN_CORNERS.map((c) => ({ ...c }));
+      }
+    }
+
+    function confirmScanCrop() {
+      if (scanCornersDefault(scanState.corners)) {
+        scanState.appliedQuad = null;
+      } else {
+        scanState.appliedQuad = scanState.corners.map((c) => ({ ...c }));
+      }
+      scanState.dragIndex = -1;
+      setAdjustDrawMode(null, { skipDraftRestore: true });
+      updateAdjustPreview();
+      updateButtons();
     }
 
     function updateAdjustModeHint() {
@@ -680,15 +728,24 @@
           "Verpixeln: Rechteck aufziehen. Nochmal «Bereich markieren» zum Beenden. Mausrad = Zoom.";
       } else if (adjustDrawMode === "scan") {
         $("adjustModeHint").textContent =
-          "Scan: die vier grünen Punkte ziehen (Ecken des Dokuments). Nochmal «Ecken verschieben» zum Beenden. Mausrad = Zoom.";
+          "Scan: grüne Punkte ziehen (größere Griffe). Vorschau erst nach «Zuschnitt übernehmen». Mausrad = Zoom.";
       } else {
         $("adjustModeHint").textContent =
           "Mausrad zoomen. «Ecken verschieben» für Dokument-Scan, «Bereich markieren» für Verpixelung.";
       }
     }
 
-    function setAdjustDrawMode(mode) {
+    function setAdjustDrawMode(mode, { skipDraftRestore = false } = {}) {
+      const wasScan = adjustDrawMode === "scan";
       adjustDrawMode = mode === "pixel" || mode === "scan" ? mode : null;
+      const isScan = adjustDrawMode === "scan";
+      if (isScan && !wasScan) {
+        restoreScanDraftFromApplied();
+        updateAdjustPreview();
+      } else if (wasScan && !isScan && !skipDraftRestore) {
+        restoreScanDraftFromApplied();
+        updateAdjustPreview();
+      }
       $("btnPixelMode").classList.toggle("active", adjustDrawMode === "pixel");
       $("btnPixelMode").textContent = adjustDrawMode === "pixel" ? "Verpixeln aktiv" : "Bereich markieren";
       $("btnScanMode").classList.toggle("active", adjustDrawMode === "scan");
@@ -697,6 +754,7 @@
       $("adjustViewport").classList.toggle("is-scanning", adjustDrawMode === "scan");
       updateAdjustModeHint();
       renderAdjustOverlay();
+      updateButtons();
     }
 
     function setPixelateMode(on) {
@@ -720,6 +778,7 @@
 
     function resetScanCorners({ refresh = true } = {}) {
       scanState.corners = DEFAULT_SCAN_CORNERS.map((c) => ({ ...c }));
+      scanState.appliedQuad = null;
       scanState.dragIndex = -1;
       renderAdjustOverlay();
       if (refresh) {
@@ -833,8 +892,7 @@
       if (pixelateState.draft) pix.push({ ...pixelateState.draft, _draft: true });
       for (const r of pix) drawRect(r, "adjust-region");
 
-      const showScan = adjustDrawMode === "scan" || !scanCornersDefault(scanState.corners);
-      if (showScan) {
+      if (adjustDrawMode === "scan") {
         const pts = scanState.corners.map((c) => ({
           px: left + c.x * imgRect.width,
           py: top + c.y * imgRect.height,
@@ -936,7 +994,7 @@
           pixel_strength: String(v.pixel_strength),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
-        if (!scanCornersDefault(v.scan_quad)) q.set("scan_quad", encodeScanQuad(v.scan_quad));
+        if (v.scan_quad) q.set("scan_quad", encodeScanQuad(v.scan_quad));
         try {
           const res = await fetch(`/api/adjust-size?${q.toString()}`, {
             signal: adjustSizeAbort.signal,
@@ -980,7 +1038,7 @@
           t: String(state.cacheBust),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
-        if (!scanCornersDefault(v.scan_quad)) q.set("scan_quad", encodeScanQuad(v.scan_quad));
+        if (v.scan_quad) q.set("scan_quad", encodeScanQuad(v.scan_quad));
         const img = $("adjustPreview");
         img.onload = () => renderAdjustOverlay();
         img.src = `/api/adjust-preview?${q.toString()}`;
@@ -1043,8 +1101,7 @@
           if (!p) return;
           scanState.corners[scanState.dragIndex] = { x: p.x, y: p.y };
           renderAdjustOverlay();
-          clearTimeout(scanState.previewTimer);
-          scanState.previewTimer = setTimeout(updateAdjustPreview, 180);
+          updateButtons();
           return;
         }
         if (pixelateState.drawing) {
@@ -1071,7 +1128,7 @@
           try {
             vp.releasePointerCapture(e.pointerId);
           } catch (_) {}
-          updateAdjustPreview();
+          updateButtons();
           return;
         }
         if (pixelateState.drawing) {
@@ -1377,6 +1434,7 @@
     $("btnScanMode").addEventListener("click", () => {
       setAdjustDrawMode(adjustDrawMode === "scan" ? null : "scan");
     });
+    $("btnScanConfirm").addEventListener("click", () => confirmScanCrop());
     $("btnPixelClear").addEventListener("click", () => clearPixelRegions());
     $("btnScanReset").addEventListener("click", () => resetScanCorners());
     $("btnAdjReset").addEventListener("click", resetAdjustSliders);
@@ -1401,7 +1459,7 @@
             contrast: v.contrast,
             saturation: v.saturation,
             pixel_strength: v.pixel_strength,
-            scan_quad: scanCornersDefault(v.scan_quad) ? null : encodeScanQuad(v.scan_quad),
+            scan_quad: v.scan_quad ? encodeScanQuad(v.scan_quad) : null,
             regions: v.regions,
           }),
         });
@@ -1420,7 +1478,7 @@
           bits.push("Farbe");
         }
         if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
-        if (!scanCornersDefault(v.scan_quad)) bits.push("Scan");
+        if (v.scan_quad) bits.push("Scan");
         resetAdjustSliders();
         await load(state.path, {
           preserveSelection: true,
