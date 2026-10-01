@@ -129,6 +129,18 @@
       border: 2px solid transparent; border-radius: 12px; overflow: hidden; background: #fff; cursor: pointer;
     }
     .card.selected { border-color: var(--accent); }
+    .card .pick {
+      display: none;
+      position: absolute; top: 8px; left: 8px; z-index: 2;
+      width: 28px; height: 28px; border-radius: 999px;
+      align-items: center; justify-content: center;
+      background: rgba(21, 32, 43, .4); color: #fff;
+      border: 2px solid #fff; font-size: .95rem; line-height: 1;
+      box-shadow: 0 2px 8px rgba(0,0,0,.18);
+    }
+    .grid.is-selecting .card .pick { display: flex; }
+    .card.selected .pick { background: var(--accent); }
+    #btnSelectMode.active { background: var(--accent); color: #fff; border-color: transparent; }
     .card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #d7dee6; }
     .card .meta { padding: .45rem .55rem .6rem; font-size: .72rem; color: var(--muted); line-height: 1.35; }
     .card .meta strong { display: block; color: var(--ink); font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: .2rem; }
@@ -399,6 +411,7 @@
       </div>
       <div class="spacer"></div>
       <button type="button" id="btnReload">Daten neu laden</button>
+      <button type="button" id="btnSelectMode" aria-pressed="false">Auswählen</button>
       <button type="button" id="btnAll">Alle</button>
       <button type="button" id="btnNone">Keine</button>
       <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
@@ -526,6 +539,7 @@
       path: "",
       files: [],
       selected: new Set(),
+      selectMode: false,
       active: null,
       cacheBust: Date.now(),
     };
@@ -1377,6 +1391,7 @@
       el.innerHTML = state.files.map((f) => {
         const sel = state.selected.has(f.path) ? "selected" : "";
         return `<article class="card ${sel}" data-path="${escapeHtml(f.path)}">
+          <span class="pick" aria-hidden="true">✓</span>
           <div class="rotate-btns">
             <button type="button" class="btn-rot" data-rot="-90" data-path="${escapeHtml(f.path)}" title="90° gegen den Uhrzeigersinn">↺</button>
             <button type="button" class="btn-rot" data-rot="90" data-path="${escapeHtml(f.path)}" title="90° im Uhrzeigersinn">↻</button>
@@ -1395,14 +1410,17 @@
         card.addEventListener("click", (e) => {
           if (e.target.closest(".btn-rot")) return;
           const p = card.dataset.path;
-          if (e.shiftKey || e.metaKey || e.ctrlKey) {
+          const toggle = state.selectMode || e.shiftKey || e.metaKey || e.ctrlKey;
+          if (toggle) {
             if (state.selected.has(p)) state.selected.delete(p);
             else state.selected.add(p);
           } else {
             state.selected = new Set([p]);
           }
           state.active = p;
-          renderFiles();
+          el.querySelectorAll(".card").forEach((c) => {
+            c.classList.toggle("selected", state.selected.has(c.dataset.path));
+          });
           renderDetail();
           updateAdjustPanel();
           updateButtons();
@@ -1501,6 +1519,18 @@
       });
     });
 
+    $("btnSelectMode").addEventListener("click", () => {
+      state.selectMode = !state.selectMode;
+      $("btnSelectMode").classList.toggle("active", state.selectMode);
+      $("btnSelectMode").setAttribute("aria-pressed", state.selectMode ? "true" : "false");
+      $("btnSelectMode").textContent = state.selectMode ? "Auswahl aktiv" : "Auswählen";
+      $("grid").classList.toggle("is-selecting", state.selectMode);
+      setStatus(
+        state.selectMode
+          ? "Auswahl aktiv — Klick markiert, nochmal Klick hebt die Markierung auf."
+          : "Auswahl beendet."
+      );
+    });
     $("btnAll").addEventListener("click", () => {
       state.selected = new Set(state.files.map((f) => f.path));
       if (!state.active && state.files[0]) state.active = state.files[0].path;
