@@ -281,7 +281,12 @@ def apply_shadows_highlights(
     highlights = _clamp_tone(highlights)
     if shadows < 0.01 and highlights < 0.01:
         return im
-    return im.point(_tone_lut(shadows, highlights))
+    # Pillow expects 256 entries per channel (RGB → 768), not a single 256-table.
+    lut = _tone_lut(shadows, highlights)
+    bands = len(im.getbands())
+    if bands > 1:
+        lut = lut * bands
+    return im.point(lut)
 
 
 def _enhance_rgb(
