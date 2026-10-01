@@ -423,12 +423,12 @@
       </div>
       <div class="spacer"></div>
       <button type="button" id="btnReload">Daten neu laden</button>
-      <button type="button" id="btnAll">Alle</button>
-      <button type="button" id="btnNone">Keine</button>
+      <button type="button" class="photos-only" id="btnAll">Alle</button>
+      <button type="button" class="photos-only" id="btnNone">Keine</button>
       <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
       <button type="button" class="primary photos-only" id="btnMove" disabled>Nach Export verschieben</button>
-      <button type="button" class="danger" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
-      <p class="delete-hint" id="deleteHint">Löschen entfernt die ausgewählten JPEGs <strong>dauerhaft von der Festplatte</strong> — nicht wiederherstellbar.</p>
+      <button type="button" class="danger photos-only" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
+      <p class="delete-hint photos-only" id="deleteHint">Löschen entfernt die ausgewählten JPEGs <strong>dauerhaft von der Festplatte</strong> — nicht wiederherstellbar.</p>
     </div>
 
     <p class="status" id="status">Lade Ordner…</p>
@@ -451,7 +451,7 @@
       <section class="panel">
         <div class="panel-head">
           <h2 id="gridTitle">Fotos</h2>
-          <label class="select-toggle" for="chkSelectMode">
+          <label class="select-toggle photos-only" for="chkSelectMode">
             <input type="checkbox" id="chkSelectMode" />
             Auswählen
           </label>
@@ -1311,6 +1311,11 @@
           ? 'Fotos bearbeiten unter <code>/photos</code>'
           : 'Export-Ordner <code>/export</code> — fertige Dateien mit Vorschau';
       $("gridTitle").textContent = root === "photos" ? "Fotos" : "Export";
+      if (root !== "photos") {
+        state.selectMode = false;
+        $("chkSelectMode").checked = false;
+        $("grid").classList.remove("is-selecting");
+      }
       updateDropzoneHint();
       load("", { bustCache: true });
     }
@@ -1406,13 +1411,16 @@
         return;
       }
       el.innerHTML = state.files.map((f) => {
-        const sel = state.selected.has(f.path) ? "selected" : "";
-        return `<article class="card ${sel}" data-path="${escapeHtml(f.path)}">
-          <span class="pick" aria-hidden="true">✓</span>
-          <div class="rotate-btns">
+        const sel = state.root === "photos" && state.selected.has(f.path) ? "selected" : "";
+        const rotate = state.root === "photos"
+          ? `<div class="rotate-btns">
             <button type="button" class="btn-rot" data-rot="-90" data-path="${escapeHtml(f.path)}" title="90° gegen den Uhrzeigersinn">↺</button>
             <button type="button" class="btn-rot" data-rot="90" data-path="${escapeHtml(f.path)}" title="90° im Uhrzeigersinn">↻</button>
-          </div>
+          </div>`
+          : "";
+        return `<article class="card ${sel}" data-path="${escapeHtml(f.path)}">
+          <span class="pick" aria-hidden="true">✓</span>
+          ${rotate}
           <img src="${mediaUrl("thumb", f.path)}" alt="" loading="lazy" />
           <div class="meta">
             <strong>${escapeHtml(f.name)}</strong>
@@ -1427,6 +1435,13 @@
         card.addEventListener("click", (e) => {
           if (e.target.closest(".btn-rot")) return;
           const p = card.dataset.path;
+          if (state.root !== "photos") {
+            state.selected = new Set();
+            state.active = p;
+            renderDetail();
+            updateButtons();
+            return;
+          }
           const toggle = state.selectMode || e.shiftKey || e.metaKey || e.ctrlKey;
           if (toggle) {
             if (state.selected.has(p)) state.selected.delete(p);
@@ -1503,12 +1518,13 @@
           <div><span>Beschreibung</span><b>${escapeHtml(f.description || "—")}</b></div>
           <div><span>Pfad</span><b>${escapeHtml(f.path)}</b></div>
         </div>
+        ${state.root === "photos" ? `
         <p class="hint">Immich nutzt <strong>DateTimeOriginal</strong>. Beschreibung und Tags werden in die JPEG-Datei geschrieben (EXIF/XMP). Drehen speichert die Pixel dauerhaft richtig.</p>
         <div class="detail-rotate">
           <button type="button" id="btnRotCCW" title="90° gegen den Uhrzeigersinn">↺ Drehen</button>
           <button type="button" id="btnRotCW" title="90° im Uhrzeigersinn">↻ Drehen</button>
         </div>
-        ${state.root === "photos" ? `<button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
+        <button type="button" id="btnUseExif">Dieses Original-Datum übernehmen</button>` : ""}
       `;
       $("btnRotCW")?.addEventListener("click", () => rotateFile(f.path, 90));
       $("btnRotCCW")?.addEventListener("click", () => rotateFile(f.path, -90));
