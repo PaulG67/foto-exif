@@ -199,6 +199,8 @@ def _is_neutral(
     *,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
 ) -> bool:
     if regions:
@@ -211,6 +213,8 @@ def _is_neutral(
         and abs(saturation - 1.0) < 0.001
         and _clamp_tone(shadows) < 0.01
         and _clamp_tone(highlights) < 0.01
+        and _clamp_tone(denoise) < 0.01
+        and _clamp_tone(sharpen) < 0.01
     )
 
 
@@ -320,6 +324,32 @@ def apply_shadows_highlights(
     return out
 
 
+def apply_denoise(im: Image.Image, amount: float) -> Image.Image:
+    """Soften flat noise and keep edges, so faces don't turn muddy."""
+    amount = _clamp_tone(amount)
+    if amount < 0.01:
+        return im
+    radius = 0.45 + 0.9 * amount
+    soft = im.filter(ImageFilter.GaussianBlur(radius=radius))
+    mixed = Image.blend(im, soft, 0.22 + 0.55 * amount)
+    diff = ImageChops.difference(im.convert("L"), soft.convert("L"))
+    edge = diff.point(lambda p: min(255, int(p * 5)))
+    return Image.composite(im, mixed, edge)
+
+
+def apply_sharpen(im: Image.Image, amount: float) -> Image.Image:
+    """Unsharp mask. Modest at full strength so halos stay limited."""
+    amount = _clamp_tone(amount)
+    if amount < 0.01:
+        return im
+    percent = int(round(50 + 140 * amount))
+    radius = 1.1 + 0.7 * amount
+    threshold = max(1, int(round(4 - 2 * amount)))
+    return im.filter(
+        ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=threshold)
+    )
+
+
 def _enhance_rgb(
     im: Image.Image,
     *,
@@ -349,6 +379,8 @@ def _process_adjusted_rgb(
     pixel_strength: float,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
 ) -> Image.Image:
     im = apply_document_scan(im, scan_quad)
@@ -360,6 +392,8 @@ def _process_adjusted_rgb(
         shadows=shadows,
         highlights=highlights,
     )
+    im = apply_denoise(im, denoise)
+    im = apply_sharpen(im, sharpen)
     pixelate_regions(im, regions, pixel_strength)
     return im
 
@@ -374,6 +408,8 @@ def render_adjusted_jpeg(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = 90,
     max_side: int | None = None,
@@ -384,6 +420,8 @@ def render_adjusted_jpeg(
     saturation = _clamp_factor(saturation)
     shadows = _clamp_tone(shadows)
     highlights = _clamp_tone(highlights)
+    denoise = _clamp_tone(denoise)
+    sharpen = _clamp_tone(sharpen)
     regions = regions or []
     quality = max(60, min(98, int(quality)))
 
@@ -401,6 +439,8 @@ def render_adjusted_jpeg(
             pixel_strength=pixel_strength,
             shadows=shadows,
             highlights=highlights,
+            denoise=denoise,
+            sharpen=sharpen,
             scan_quad=scan_quad,
         )
         buf = BytesIO()
@@ -418,6 +458,8 @@ def build_adjusted_jpeg(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> bytes | None:
@@ -430,6 +472,8 @@ def build_adjusted_jpeg(
     saturation = _clamp_factor(saturation)
     shadows = _clamp_tone(shadows)
     highlights = _clamp_tone(highlights)
+    denoise = _clamp_tone(denoise)
+    sharpen = _clamp_tone(sharpen)
     regions = regions or []
     if _is_neutral(
         brightness,
@@ -438,6 +482,8 @@ def build_adjusted_jpeg(
         regions,
         shadows=shadows,
         highlights=highlights,
+        denoise=denoise,
+        sharpen=sharpen,
         scan_quad=scan_quad,
     ):
         return None
@@ -472,6 +518,8 @@ def build_adjusted_jpeg(
             pixel_strength=pixel_strength,
             shadows=shadows,
             highlights=highlights,
+            denoise=denoise,
+            sharpen=sharpen,
             scan_quad=scan_quad,
         )
         buf = BytesIO()
@@ -498,6 +546,8 @@ def estimate_adjusted_size(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> int:
@@ -511,6 +561,8 @@ def estimate_adjusted_size(
         pixel_strength=pixel_strength,
         shadows=shadows,
         highlights=highlights,
+        denoise=denoise,
+        sharpen=sharpen,
         scan_quad=scan_quad,
         quality=quality,
     )
@@ -529,6 +581,8 @@ def apply_image_adjustments(
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
     shadows: float = 0.0,
     highlights: float = 0.0,
+    denoise: float = 0.0,
+    sharpen: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> None:
@@ -546,6 +600,8 @@ def apply_image_adjustments(
         pixel_strength=pixel_strength,
         shadows=shadows,
         highlights=highlights,
+        denoise=denoise,
+        sharpen=sharpen,
         scan_quad=scan_quad,
         quality=quality,
     )

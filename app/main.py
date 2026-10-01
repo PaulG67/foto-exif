@@ -184,6 +184,8 @@ def create_app() -> Flask:
                 saturation=float(request.args.get("saturation", 1)),
                 shadows=float(request.args.get("shadows", 0)),
                 highlights=float(request.args.get("highlights", 0)),
+                denoise=float(request.args.get("denoise", 0)),
+                sharpen=float(request.args.get("sharpen", 0)),
                 regions=regions,
                 pixel_strength=float(request.args.get("pixel_strength", 0.045)),
                 scan_quad=scan_quad,
@@ -207,6 +209,8 @@ def create_app() -> Flask:
             saturation = float(request.args.get("saturation", 1))
             shadows = float(request.args.get("shadows", 0))
             highlights = float(request.args.get("highlights", 0))
+            denoise = float(request.args.get("denoise", 0))
+            sharpen = float(request.args.get("sharpen", 0))
             pixel_strength = float(request.args.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
@@ -221,6 +225,8 @@ def create_app() -> Flask:
                 saturation=saturation,
                 shadows=shadows,
                 highlights=highlights,
+                denoise=denoise,
+                sharpen=sharpen,
                 regions=regions,
                 pixel_strength=pixel_strength,
                 scan_quad=scan_quad,
@@ -249,6 +255,8 @@ def create_app() -> Flask:
             saturation = float(data.get("saturation", 1))
             shadows = float(data.get("shadows", 0))
             highlights = float(data.get("highlights", 0))
+            denoise = float(data.get("denoise", 0))
+            sharpen = float(data.get("sharpen", 0))
             pixel_strength = float(data.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
@@ -266,6 +274,8 @@ def create_app() -> Flask:
                 saturation=saturation,
                 shadows=shadows,
                 highlights=highlights,
+                denoise=denoise,
+                sharpen=sharpen,
                 regions=regions,
                 pixel_strength=pixel_strength,
                 scan_quad=scan_quad,

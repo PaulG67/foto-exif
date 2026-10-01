@@ -533,6 +533,15 @@
             <input type="range" id="adjHighlights" min="0" max="1" step="0.01" value="0" />
           </div>
           <p class="group-hint">Wie in Zoner: dunkle Bildteile werden lokal heller, helle lokal dunkler. Die Zeichnung darin bleibt erhalten.</p>
+          <div class="slider-row">
+            <label>Entrauschen <span id="valDenoise">0%</span></label>
+            <input type="range" id="adjDenoise" min="0" max="1" step="0.01" value="0" />
+          </div>
+          <div class="slider-row">
+            <label>Schärfen <span id="valSharpen">0%</span></label>
+            <input type="range" id="adjSharpen" min="0" max="1" step="0.01" value="0" />
+          </div>
+          <p class="group-hint">Zuerst Entrauschen, dann leicht Schärfen. Zu viel Schärfe erzeugt helle Ränder.</p>
           <div class="adjust-scan-box">
             <p class="group-title">Dokument scannen</p>
             <p class="group-hint" id="scanRegionHint">Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.</p>
@@ -715,6 +724,8 @@
         saturation: parseFloat($("adjSaturation").value) || 1,
         shadows: parseFloat($("adjShadows").value) || 0,
         highlights: parseFloat($("adjHighlights").value) || 0,
+        denoise: parseFloat($("adjDenoise").value) || 0,
+        sharpen: parseFloat($("adjSharpen").value) || 0,
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
         regions: pixelateState.regions.map((r) => ({ ...r })),
         scan_quad: applied ? applied.map((c) => ({ ...c })) : null,
@@ -729,6 +740,8 @@
         Math.abs(v.saturation - 1) < 0.005 &&
         v.shadows < 0.01 &&
         v.highlights < 0.01 &&
+        v.denoise < 0.01 &&
+        v.sharpen < 0.01 &&
         !v.regions.length &&
         !v.scan_quad
       );
@@ -758,6 +771,8 @@
       $("valSaturation").textContent = v.saturation.toFixed(2);
       $("valShadows").textContent = `${Math.round(v.shadows * 100)}%`;
       $("valHighlights").textContent = `${Math.round(v.highlights * 100)}%`;
+      $("valDenoise").textContent = `${Math.round(v.denoise * 100)}%`;
+      $("valSharpen").textContent = `${Math.round(v.sharpen * 100)}%`;
       $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
@@ -1054,6 +1069,8 @@
       $("adjSaturation").value = "1";
       $("adjShadows").value = "0";
       $("adjHighlights").value = "0";
+      $("adjDenoise").value = "0";
+      $("adjSharpen").value = "0";
       $("adjPixel").value = "0.045";
       setAdjustDrawMode(null);
       clearPixelRegions({ refresh: false });
@@ -1119,6 +1136,8 @@
           saturation: String(v.saturation),
           shadows: String(v.shadows),
           highlights: String(v.highlights),
+          denoise: String(v.denoise),
+          sharpen: String(v.sharpen),
           pixel_strength: String(v.pixel_strength),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
@@ -1164,6 +1183,8 @@
           saturation: String(v.saturation),
           shadows: String(v.shadows),
           highlights: String(v.highlights),
+          denoise: String(v.denoise),
+          sharpen: String(v.sharpen),
           pixel_strength: String(v.pixel_strength),
           t: String(state.cacheBust),
         });
@@ -1588,7 +1609,7 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation", "adjShadows", "adjHighlights", "adjPixel"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjShadows", "adjHighlights", "adjDenoise", "adjSharpen", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
     $("btnPixelMode").addEventListener("click", () => {
@@ -1623,6 +1644,8 @@
             saturation: v.saturation,
             shadows: v.shadows,
             highlights: v.highlights,
+            denoise: v.denoise,
+            sharpen: v.sharpen,
             pixel_strength: v.pixel_strength,
             scan_quad: v.scan_quad ? encodeScanQuad(v.scan_quad) : null,
             regions: v.regions,
@@ -1644,6 +1667,8 @@
         }
         if (v.shadows >= 0.01) bits.push("Schatten");
         if (v.highlights >= 0.01) bits.push("Lichter");
+        if (v.denoise >= 0.01) bits.push("Entrauschen");
+        if (v.sharpen >= 0.01) bits.push("Schärfen");
         if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
         if (v.scan_quad) bits.push("Scan");
         resetAdjustSliders();
