@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import piexif
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 
 from app.exif_utils import _insert_xmp, read_exif_meta
 
@@ -256,45 +256,68 @@ def _clamp_tone(value: float) -> float:
     return max(0.0, min(1.0, v))
 
 
-def _tone_lut(shadows: float, highlights: float) -> list[int]:
+def _surround_luminance(im: Image.Image) -> Image.Image:
+    """Wide blurred luminance: decides which regions are shadow or highlight."""
+    w, h = im.size
+    lum = im.convert("L")
+    short = min(w, h)
+    target = 420
+    if short > target:
+        scale = target / float(short)
+        small = lum.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.BOX)
+    else:
+        small = lum
+    radius = max(6, int(min(small.size) * 0.10))
+    blurred = small.filter(ImageFilter.GaussianBlur(radius=radius))
+    if blurred.size != (w, h):
+        blurred = blurred.resize((w, h), Image.Resampling.BILINEAR)
+    return blurred
+
+
+def _exposure_luts(shadows: float, highlights: float) -> tuple[list[int], list[int]]:
     """
-    Schatten aufhellen und Lichter abdunkeln, ohne den Schwarz- oder Weißpunkt
-    zu verschieben. Ein angehobenes Schwarz wirkt sonst wie Nebel bzw. weniger Kontrast.
+    Local exposure from the surrounding brightness (Zoner Lichter/Schatten).
+    factor stores min(gain, 1), extra stores the part above 1, both as 0..255.
     """
-    shadow_gamma = 1.0 - 0.50 * shadows
-    highlight_gamma = 1.0 + 2.0 * highlights
-    lut: list[int] = []
+    factor: list[int] = []
+    extra: list[int] = []
     for i in range(256):
-        x = i / 255.0
-        y = x
-        if shadows > 0.0:
-            lifted = x ** shadow_gamma
-            t = min(1.0, x / 0.55)
-            w = (1.0 - t) ** 2
-            y = y * (1.0 - w) + lifted * w
-        if highlights > 0.0:
-            compressed = y ** highlight_gamma
-            t = max(0.0, (y - 0.50) / 0.50)
-            w = t * t
-            y = y * (1.0 - w) + compressed * w
-        y = 0.0 if y < 0.0 else (1.0 if y > 1.0 else y)
-        lut.append(int(round(y * 255.0)))
-    return lut
+        b = i / 255.0
+        gain = 1.0
+        if shadows > 0.0 and b < 0.62:
+            shadow_mask = ((0.62 - b) / 0.62) ** 1.35
+            gain += shadows * shadow_mask * 1.35
+        if highlights > 0.0 and b > 0.38:
+            highlight_mask = ((b - 0.38) / 0.62) ** 1.35
+            gain *= 1.0 - highlights * highlight_mask * 0.62
+        gain = max(0.32, min(2.0, gain))
+        if gain >= 1.0:
+            factor.append(255)
+            extra.append(int(round((gain - 1.0) * 255)))
+        else:
+            factor.append(int(round(gain * 255)))
+            extra.append(0)
+    return factor, extra
 
 
 def apply_shadows_highlights(
     im: Image.Image, *, shadows: float = 0.0, highlights: float = 0.0
 ) -> Image.Image:
+    """
+    Lighten dark regions and darken bright regions without a global contrast curve.
+    The mask comes from a strong blur, so texture inside those regions stays.
+    """
     shadows = _clamp_tone(shadows)
     highlights = _clamp_tone(highlights)
     if shadows < 0.01 and highlights < 0.01:
         return im
-    # Pillow expects 256 entries per channel (RGB → 768), not a single 256-table.
-    lut = _tone_lut(shadows, highlights)
-    bands = len(im.getbands())
-    if bands > 1:
-        lut = lut * bands
-    return im.point(lut)
+    surround = _surround_luminance(im)
+    factor_lut, extra_lut = _exposure_luts(shadows, highlights)
+    out = ImageChops.multiply(im, surround.point(factor_lut).convert("RGB"))
+    if shadows >= 0.01:
+        extra = ImageChops.multiply(im, surround.point(extra_lut).convert("RGB"))
+        out = ImageChops.add(out, extra)
+    return out
 
 
 def _enhance_rgb(
