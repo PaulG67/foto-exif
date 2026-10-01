@@ -94,6 +94,9 @@
       line-height: 1.35;
     }
     .spacer { flex: 1; }
+    .toolbar-actions {
+      display: flex; flex-wrap: nowrap; gap: .5rem; align-items: center;
+    }
     .status { min-height: 1.3rem; color: var(--muted); margin: 0 0 1rem; }
     .status.ok { color: var(--ok); }
     .status.err { color: var(--danger); }
@@ -428,9 +431,11 @@
         <p class="group-hint" id="renamePreview">Beispiel: scan_001.jpg, scan_002.jpg, …</p>
       </div>
       <div class="spacer"></div>
-      <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
-      <button type="button" class="primary photos-only" id="btnMove" disabled>Nach Export verschieben</button>
-      <button type="button" class="danger photos-only" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
+      <div class="toolbar-actions">
+        <button type="button" class="primary" id="btnSave" disabled>In Dateien speichern</button>
+        <button type="button" class="primary" id="btnMove" disabled>Nach Export verschieben</button>
+        <button type="button" class="danger" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
+      </div>
       <p class="delete-hint photos-only" id="deleteHint">Löschen entfernt die ausgewählten JPEGs <strong>dauerhaft von der Festplatte</strong> — nicht wiederherstellbar.</p>
     </div>
 
