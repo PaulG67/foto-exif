@@ -182,6 +182,8 @@ def create_app() -> Flask:
                 brightness=float(request.args.get("brightness", 1)),
                 contrast=float(request.args.get("contrast", 1)),
                 saturation=float(request.args.get("saturation", 1)),
+                shadows=float(request.args.get("shadows", 0)),
+                highlights=float(request.args.get("highlights", 0)),
                 regions=regions,
                 pixel_strength=float(request.args.get("pixel_strength", 0.045)),
                 scan_quad=scan_quad,
@@ -203,6 +205,8 @@ def create_app() -> Flask:
             brightness = float(request.args.get("brightness", 1))
             contrast = float(request.args.get("contrast", 1))
             saturation = float(request.args.get("saturation", 1))
+            shadows = float(request.args.get("shadows", 0))
+            highlights = float(request.args.get("highlights", 0))
             pixel_strength = float(request.args.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
@@ -215,6 +219,8 @@ def create_app() -> Flask:
                 brightness=brightness,
                 contrast=contrast,
                 saturation=saturation,
+                shadows=shadows,
+                highlights=highlights,
                 regions=regions,
                 pixel_strength=pixel_strength,
                 scan_quad=scan_quad,
@@ -241,6 +247,8 @@ def create_app() -> Flask:
             brightness = float(data.get("brightness", 1))
             contrast = float(data.get("contrast", 1))
             saturation = float(data.get("saturation", 1))
+            shadows = float(data.get("shadows", 0))
+            highlights = float(data.get("highlights", 0))
             pixel_strength = float(data.get("pixel_strength", 0.045))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "error": "Ungueltige Werte"}), 400
@@ -256,6 +264,8 @@ def create_app() -> Flask:
                 brightness=brightness,
                 contrast=contrast,
                 saturation=saturation,
+                shadows=shadows,
+                highlights=highlights,
                 regions=regions,
                 pixel_strength=pixel_strength,
                 scan_quad=scan_quad,

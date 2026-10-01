@@ -197,6 +197,8 @@ def _is_neutral(
     saturation: float,
     regions: list[tuple[float, float, float, float]] | None = None,
     *,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
 ) -> bool:
     if regions:
@@ -207,6 +209,8 @@ def _is_neutral(
         abs(brightness - 1.0) < 0.001
         and abs(contrast - 1.0) < 0.001
         and abs(saturation - 1.0) < 0.001
+        and _clamp_tone(shadows) < 0.01
+        and _clamp_tone(highlights) < 0.01
     )
 
 
@@ -243,13 +247,53 @@ def pixelate_regions(
     return im
 
 
+def _clamp_tone(value: float) -> float:
+    """0 = aus, 1 = stark. Für Schatten-Aufhellung und Lichter-Abdunklung."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, v))
+
+
+def _tone_lut(shadows: float, highlights: float) -> list[int]:
+    """
+    Gleiche Kurve auf R, G und B: dunkle Pixel anheben, helle absenken.
+    Mitteltöne bleiben weitgehend stehen.
+    """
+    lut: list[int] = []
+    for i in range(256):
+        x = i / 255.0
+        sw = max(0.0, 1.0 - x / 0.58)
+        sw = sw * sw
+        hw = max(0.0, (x - 0.42) / 0.58)
+        hw = hw * hw
+        y = x + shadows * 0.42 * sw * (1.0 - x) - highlights * 0.40 * hw * x
+        y = max(0.0, min(1.0, y))
+        lut.append(int(round(y * 255.0)))
+    return lut
+
+
+def apply_shadows_highlights(
+    im: Image.Image, *, shadows: float = 0.0, highlights: float = 0.0
+) -> Image.Image:
+    shadows = _clamp_tone(shadows)
+    highlights = _clamp_tone(highlights)
+    if shadows < 0.01 and highlights < 0.01:
+        return im
+    return im.point(_tone_lut(shadows, highlights))
+
+
 def _enhance_rgb(
     im: Image.Image,
     *,
     brightness: float,
     contrast: float,
     saturation: float,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
 ) -> Image.Image:
+    im = apply_shadows_highlights(im, shadows=shadows, highlights=highlights)
     if abs(brightness - 1.0) > 0.001:
         im = ImageEnhance.Brightness(im).enhance(brightness)
     if abs(contrast - 1.0) > 0.001:
@@ -267,10 +311,19 @@ def _process_adjusted_rgb(
     saturation: float,
     regions: list[tuple[float, float, float, float]],
     pixel_strength: float,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
 ) -> Image.Image:
     im = apply_document_scan(im, scan_quad)
-    im = _enhance_rgb(im, brightness=brightness, contrast=contrast, saturation=saturation)
+    im = _enhance_rgb(
+        im,
+        brightness=brightness,
+        contrast=contrast,
+        saturation=saturation,
+        shadows=shadows,
+        highlights=highlights,
+    )
     pixelate_regions(im, regions, pixel_strength)
     return im
 
@@ -283,6 +336,8 @@ def render_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = 90,
     max_side: int | None = None,
@@ -291,6 +346,8 @@ def render_adjusted_jpeg(
     brightness = _clamp_factor(brightness)
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
+    shadows = _clamp_tone(shadows)
+    highlights = _clamp_tone(highlights)
     regions = regions or []
     quality = max(60, min(98, int(quality)))
 
@@ -306,6 +363,8 @@ def render_adjusted_jpeg(
             saturation=saturation,
             regions=regions,
             pixel_strength=pixel_strength,
+            shadows=shadows,
+            highlights=highlights,
             scan_quad=scan_quad,
         )
         buf = BytesIO()
@@ -321,6 +380,8 @@ def build_adjusted_jpeg(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> bytes | None:
@@ -331,12 +392,16 @@ def build_adjusted_jpeg(
     brightness = _clamp_factor(brightness)
     contrast = _clamp_factor(contrast)
     saturation = _clamp_factor(saturation)
+    shadows = _clamp_tone(shadows)
+    highlights = _clamp_tone(highlights)
     regions = regions or []
     if _is_neutral(
         brightness,
         contrast,
         saturation,
         regions,
+        shadows=shadows,
+        highlights=highlights,
         scan_quad=scan_quad,
     ):
         return None
@@ -369,6 +434,8 @@ def build_adjusted_jpeg(
             saturation=saturation,
             regions=regions,
             pixel_strength=pixel_strength,
+            shadows=shadows,
+            highlights=highlights,
             scan_quad=scan_quad,
         )
         buf = BytesIO()
@@ -393,6 +460,8 @@ def estimate_adjusted_size(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> int:
@@ -404,6 +473,8 @@ def estimate_adjusted_size(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
+        shadows=shadows,
+        highlights=highlights,
         scan_quad=scan_quad,
         quality=quality,
     )
@@ -420,6 +491,8 @@ def apply_image_adjustments(
     saturation: float = 1.0,
     regions: list[tuple[float, float, float, float]] | None = None,
     pixel_strength: float = DEFAULT_PIXEL_STRENGTH,
+    shadows: float = 0.0,
+    highlights: float = 0.0,
     scan_quad: list[tuple[float, float]] | None = None,
     quality: int = DEFAULT_SAVE_QUALITY,
 ) -> None:
@@ -435,6 +508,8 @@ def apply_image_adjustments(
         saturation=saturation,
         regions=regions,
         pixel_strength=pixel_strength,
+        shadows=shadows,
+        highlights=highlights,
         scan_quad=scan_quad,
         quality=quality,
     )

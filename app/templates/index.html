@@ -481,6 +481,14 @@
             <label>Sättigung <span id="valSaturation">1.00</span></label>
             <input type="range" id="adjSaturation" min="0.0" max="2.0" step="0.01" value="1" />
           </div>
+          <div class="slider-row">
+            <label>Dunkle Bereiche aufhellen <span id="valShadows">0%</span></label>
+            <input type="range" id="adjShadows" min="0" max="1" step="0.01" value="0" />
+          </div>
+          <div class="slider-row">
+            <label>Helle Bereiche abdunkeln <span id="valHighlights">0%</span></label>
+            <input type="range" id="adjHighlights" min="0" max="1" step="0.01" value="0" />
+          </div>
           <div class="adjust-scan-box">
             <p class="group-title">Dokument scannen</p>
             <p class="group-hint" id="scanRegionHint">Vier Ecken auf dem Foto setzen — wie in Scan-Apps: perspektivisch gerade schneiden und begradigen.</p>
@@ -660,6 +668,8 @@
         brightness: parseFloat($("adjBrightness").value) || 1,
         contrast: parseFloat($("adjContrast").value) || 1,
         saturation: parseFloat($("adjSaturation").value) || 1,
+        shadows: parseFloat($("adjShadows").value) || 0,
+        highlights: parseFloat($("adjHighlights").value) || 0,
         pixel_strength: parseFloat($("adjPixel").value) || 0.045,
         regions: pixelateState.regions.map((r) => ({ ...r })),
         scan_quad: applied ? applied.map((c) => ({ ...c })) : null,
@@ -672,6 +682,8 @@
         Math.abs(v.brightness - 1) < 0.005 &&
         Math.abs(v.contrast - 1) < 0.005 &&
         Math.abs(v.saturation - 1) < 0.005 &&
+        v.shadows < 0.01 &&
+        v.highlights < 0.01 &&
         !v.regions.length &&
         !v.scan_quad
       );
@@ -699,6 +711,8 @@
       $("valBrightness").textContent = v.brightness.toFixed(2);
       $("valContrast").textContent = v.contrast.toFixed(2);
       $("valSaturation").textContent = v.saturation.toFixed(2);
+      $("valShadows").textContent = `${Math.round(v.shadows * 100)}%`;
+      $("valHighlights").textContent = `${Math.round(v.highlights * 100)}%`;
       $("valPixel").textContent = pixelStrengthLabel(v.pixel_strength);
       $("valZoom").textContent = `${Math.round(zoomState.scale * 100)}%`;
       $("adjZoom").value = String(zoomState.scale);
@@ -993,6 +1007,8 @@
       $("adjBrightness").value = "1";
       $("adjContrast").value = "1";
       $("adjSaturation").value = "1";
+      $("adjShadows").value = "0";
+      $("adjHighlights").value = "0";
       $("adjPixel").value = "0.045";
       setAdjustDrawMode(null);
       clearPixelRegions({ refresh: false });
@@ -1056,6 +1072,8 @@
           brightness: String(v.brightness),
           contrast: String(v.contrast),
           saturation: String(v.saturation),
+          shadows: String(v.shadows),
+          highlights: String(v.highlights),
           pixel_strength: String(v.pixel_strength),
         });
         if (v.regions.length) q.set("regions", encodeRegionsParam(v.regions));
@@ -1099,6 +1117,8 @@
           brightness: String(v.brightness),
           contrast: String(v.contrast),
           saturation: String(v.saturation),
+          shadows: String(v.shadows),
+          highlights: String(v.highlights),
           pixel_strength: String(v.pixel_strength),
           t: String(state.cacheBust),
         });
@@ -1494,7 +1514,7 @@
       updateButtons();
     });
 
-    ["adjBrightness", "adjContrast", "adjSaturation", "adjPixel"].forEach((id) => {
+    ["adjBrightness", "adjContrast", "adjSaturation", "adjShadows", "adjHighlights", "adjPixel"].forEach((id) => {
       $(id).addEventListener("input", updateAdjustPreview);
     });
     $("btnPixelMode").addEventListener("click", () => {
@@ -1527,6 +1547,8 @@
             brightness: v.brightness,
             contrast: v.contrast,
             saturation: v.saturation,
+            shadows: v.shadows,
+            highlights: v.highlights,
             pixel_strength: v.pixel_strength,
             scan_quad: v.scan_quad ? encodeScanQuad(v.scan_quad) : null,
             regions: v.regions,
@@ -1546,6 +1568,8 @@
         ) {
           bits.push("Farbe");
         }
+        if (v.shadows >= 0.01) bits.push("Schatten");
+        if (v.highlights >= 0.01) bits.push("Lichter");
         if (v.regions.length) bits.push(`${v.regions.length}× verpixelt`);
         if (v.scan_quad) bits.push("Scan");
         resetAdjustSliders();
