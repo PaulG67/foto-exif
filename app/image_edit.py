@@ -258,18 +258,26 @@ def _clamp_tone(value: float) -> float:
 
 def _tone_lut(shadows: float, highlights: float) -> list[int]:
     """
-    Gleiche Kurve auf R, G und B: dunkle Pixel anheben, helle absenken.
-    Mitteltöne bleiben weitgehend stehen.
+    Schatten aufhellen und Lichter abdunkeln, ohne den Schwarz- oder Weißpunkt
+    zu verschieben. Ein angehobenes Schwarz wirkt sonst wie Nebel bzw. weniger Kontrast.
     """
+    shadow_gamma = 1.0 - 0.50 * shadows
+    highlight_gamma = 1.0 + 2.0 * highlights
     lut: list[int] = []
     for i in range(256):
         x = i / 255.0
-        sw = max(0.0, 1.0 - x / 0.58)
-        sw = sw * sw
-        hw = max(0.0, (x - 0.42) / 0.58)
-        hw = hw * hw
-        y = x + shadows * 0.42 * sw * (1.0 - x) - highlights * 0.40 * hw * x
-        y = max(0.0, min(1.0, y))
+        y = x
+        if shadows > 0.0:
+            lifted = x ** shadow_gamma
+            t = min(1.0, x / 0.55)
+            w = (1.0 - t) ** 2
+            y = y * (1.0 - w) + lifted * w
+        if highlights > 0.0:
+            compressed = y ** highlight_gamma
+            t = max(0.0, (y - 0.50) / 0.50)
+            w = t * t
+            y = y * (1.0 - w) + compressed * w
+        y = 0.0 if y < 0.0 else (1.0 if y > 1.0 else y)
         lut.append(int(round(y * 255.0)))
     return lut
 
