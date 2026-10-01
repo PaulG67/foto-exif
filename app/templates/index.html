@@ -120,6 +120,12 @@
       padding: .65rem 1rem; border-bottom: 1px solid var(--line);
     }
     .panel-head h2 { padding: 0; border: none; }
+    .grid-tools {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .4rem;
+    }
+    .grid-tools button {
+      padding: .32rem .65rem; font-size: .78rem; border-radius: 8px;
+    }
     .select-toggle {
       display: inline-flex; align-items: center; gap: .35rem;
       font-size: .8rem; font-weight: 600; color: var(--muted);
@@ -361,7 +367,7 @@
       <button type="button" data-tab="export" id="tabExport">Export überwachen</button>
     </div>
 
-    <div class="toolbar">
+    <div class="toolbar photos-only">
       <div class="field photos-only" id="dateFields">
         <label for="date">Aufnahmedatum</label>
         <input type="date" id="date" />
@@ -422,9 +428,6 @@
         <p class="group-hint" id="renamePreview">Beispiel: scan_001.jpg, scan_002.jpg, …</p>
       </div>
       <div class="spacer"></div>
-      <button type="button" id="btnReload">Daten neu laden</button>
-      <button type="button" class="photos-only" id="btnAll">Alle</button>
-      <button type="button" class="photos-only" id="btnNone">Keine</button>
       <button type="button" class="primary photos-only" id="btnSave" disabled>In Dateien speichern</button>
       <button type="button" class="primary photos-only" id="btnMove" disabled>Nach Export verschieben</button>
       <button type="button" class="danger photos-only" id="btnDelete" disabled title="Dauerhaft von der Festplatte löschen">Löschen</button>
@@ -451,10 +454,15 @@
       <section class="panel">
         <div class="panel-head">
           <h2 id="gridTitle">Fotos</h2>
-          <label class="select-toggle photos-only" for="chkSelectMode">
-            <input type="checkbox" id="chkSelectMode" />
-            Auswählen
-          </label>
+          <div class="grid-tools">
+            <button type="button" id="btnReload">Daten neu laden</button>
+            <button type="button" class="photos-only" id="btnAll">Alle</button>
+            <button type="button" class="photos-only" id="btnNone">Keine</button>
+            <label class="select-toggle photos-only" for="chkSelectMode">
+              <input type="checkbox" id="chkSelectMode" />
+              Auswählen
+            </label>
+          </div>
         </div>
         <div class="grid" id="grid"><div class="empty">Keine JPEGs</div></div>
       </section>
