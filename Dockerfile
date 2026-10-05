@@ -3,6 +3,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="Foto-exif"
 LABEL org.opencontainers.image.description="EXIF date editor for Immich scans — Unraid"
 LABEL org.opencontainers.image.source="https://github.com/PaulG67/foto-exif"
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/PaulG67/foto-exif/main/icon.png"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

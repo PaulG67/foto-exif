@@ -20,7 +20,7 @@ Updates: Docker - foto-exif - Force Update. Neue Felder nur mit Edit - Apply.
   <Category>MediaApp:Photos Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8791]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/PaulG67/foto-exif/main/unraid/my-foto-exif.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/PaulG67/foto-exif/main/unraid/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/PaulG67/foto-exif/main/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
